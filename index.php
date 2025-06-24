@@ -111,7 +111,18 @@ if (!function_exists('get_data')) {
 if (!function_exists('login')) { function login($email, $password) { $conn = get_db_connection(); $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?"); $stmt->bind_param("s", $email); $stmt->execute(); $result = $stmt->get_result(); if ($user = $result->fetch_assoc()) { if (password_verify($password, $user['password_hash'])) { unset($user['password_hash']); $_SESSION['user'] = $user; return true; } } return false; } }
 if (!function_exists('logout')) { function logout() { session_destroy(); header('Location: index.php?page=login'); exit; } }
 if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']); } }
-if (!function_exists('get_current_user')) { function get_current_user() { return $_SESSION['user'] ?? null; } }
+
+// CORREÇÃO: Garante que a função sempre retorne um array ou null.
+if (!function_exists('get_current_user')) { 
+    function get_current_user() { 
+        // Verifica se a sessão 'user' existe E se é um array antes de retornar.
+        if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
+            return $_SESSION['user'];
+        }
+        return null; // Retorna nulo em todos os outros casos.
+    } 
+}
+
 if (!function_exists('has_permission')) { function has_permission($roles) { $user = get_current_user(); if (!$user) return false; return in_array($user['role'], (array)$roles); } }
 
 // --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
@@ -204,13 +215,14 @@ if (!function_exists('render_app_layout')) {
             'tester' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Meus Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
             'client' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
         ];
-        $userNav = $navItems[$user['role']];
+        // Adicionado um fallback para o caso de o 'role' não existir.
+        $userNav = $navItems[$user['role'] ?? 'client'] ?? $navItems['client'];
         ?>
         <div class="h-screen w-screen flex flex-col sm:flex-row bg-gray-100">
             <div class="hidden sm:flex flex-col w-64 bg-white border-r border-gray-200 p-4">
                 <h1 class="text-2xl font-bold text-cyan-600 mb-10 px-2">TestBot</h1>
                 <nav class="flex-1 space-y-2"><?php foreach ($userNav as $item): $isActive = $page === $item['path']; ?><a href="index.php?page=<?= $item['path'] ?>" class="w-full flex items-center gap-3 text-left py-2.5 px-4 rounded-lg transition-colors text-base font-semibold <?= $isActive ? 'bg-cyan-500 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100' ?>"><?= $item['icon']('class="w-5 h-5"') ?><?= htmlspecialchars($item['name']) ?></a><?php endforeach; ?></nav>
-                <div class="pt-6 border-t border-gray-200"><p class="text-sm font-semibold text-gray-800"><?= htmlspecialchars($user['name']) ?></p><p class="text-xs text-gray-500 capitalize"><?= htmlspecialchars($user['role']) ?></p></div>
+                <div class="pt-6 border-t border-gray-200"><p class="text-sm font-semibold text-gray-800"><?= htmlspecialchars($user['name'] ?? 'Visitante') ?></p><p class="text-xs text-gray-500 capitalize"><?= htmlspecialchars($user['role'] ?? '') ?></p></div>
             </div>
             <div class="flex-1 flex flex-col overflow-hidden">
                 <header class="bg-white/80 backdrop-blur-lg border-b border-gray-200 w-full z-10"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div class="flex items-center justify-between h-16"><h1 class="text-lg font-bold text-gray-800"><?= htmlspecialchars($title) ?></h1><a href="index.php?page=logout" class="hidden sm:flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-red-500"><?= LogOutIcon('class="w-5 h-5"') ?>Sair</a></div></div></header>
