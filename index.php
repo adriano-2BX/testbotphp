@@ -87,12 +87,7 @@ if (!function_exists('get_data')) {
 }
 
 // --- FUNÇÕES DE AUTENTICAÇÃO E UTILITÁRIOS ---
-// CORREÇÃO: Função de login agora retorna um status específico para erros detalhados.
 if (!function_exists('login')) {
-    /**
-     * Tenta autenticar um utilizador.
-     * @return string Retorna 'success', 'user_not_found', ou 'wrong_password'.
-     */
     function login($email, $password) {
         $conn = get_db_connection();
         $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?");
@@ -101,18 +96,14 @@ if (!function_exists('login')) {
         $result = $stmt->get_result();
 
         if ($user = $result->fetch_assoc()) {
-            // Utilizador encontrado, agora verifica a senha.
             if (password_verify($password, $user['password_hash'])) {
-                // Senha correta
                 unset($user['password_hash']);
                 $_SESSION['user'] = $user;
                 return 'success';
             } else {
-                // Senha incorreta
                 return 'wrong_password';
             }
         } else {
-            // Utilizador não encontrado
             return 'user_not_found';
         }
     }
@@ -155,7 +146,6 @@ if (!function_exists('handle_post_requests')) {
 
         try {
             switch ($action) {
-                // CORREÇÃO: Lógica de login agora usa os novos retornos para dar feedback específico.
                 case 'login':
                     $loginResult = login($_POST['email'], $_POST['password']);
                     if ($loginResult === 'success') {
@@ -270,8 +260,8 @@ if (!function_exists('handle_post_requests')) {
             $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
 
-        session_write_close();
-        
+        // CORREÇÃO: Removido 'session_write_close()' pois pode interferir com o redirecionamento.
+        // O PHP guarda a sessão automaticamente no final da execução do script (acionado pelo 'exit').
         header('Location: ' . $redirect_url);
         exit;
     }
