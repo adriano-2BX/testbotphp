@@ -4,6 +4,23 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
+// --- DIAGNÓSTICO DE SESSÃO ---
+// Verifica se o diretório de sessões é gravável. Isso é útil para depurar
+// problemas de permissão em ambientes como Docker, que é uma causa comum para falhas de login.
+$session_save_path = session_save_path();
+if ($session_save_path && !is_writable($session_save_path)) {
+    // Se não for possível escrever, impede a execução e mostra um erro claro.
+    render_error_page(
+        'Erro de Configuração do Servidor',
+        'O diretório de sessões do PHP não tem permissão de escrita. A aplicação não pode funcionar corretamente.<br><br>' .
+        '<b>Caminho do Diretório:</b> ' . htmlspecialchars($session_save_path) . '<br><br>' .
+        'Por favor, verifique as permissões do diretório no servidor. Em ambientes Docker, isso geralmente significa ajustar as permissões do volume ou do diretório dentro do contentor (ex: `chmod 777 /tmp/sessions`).'
+    );
+    exit;
+}
+// --- FIM DIAGNÓSTICO ---
+
+
 // --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
 /*
  * ATENÇÃO: As credenciais do banco de dados foram atualizadas para usar o utilizador 'root'.
@@ -98,6 +115,11 @@ if (!function_exists('login')) {
         if ($user = $result->fetch_assoc()) {
             if (password_verify($password, $user['password_hash'])) {
                 unset($user['password_hash']);
+                
+                // CORREÇÃO DE SEGURANÇA: Regenera o ID da sessão para prevenir "session fixation".
+                // Isto também pode ajudar a resolver problemas de sessão em algumas configurações de servidor.
+                session_regenerate_id(true);
+
                 $_SESSION['user'] = $user;
                 return 'success';
             } else {
@@ -260,9 +282,7 @@ if (!function_exists('handle_post_requests')) {
             $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
 
-        // CORREÇÃO: Garante que todos os dados da sessão são salvos antes do redirecionamento.
-        // Isso é crucial para que o estado de login (`$_SESSION['user']`) persista na próxima página,
-        // resolvendo o loop de login.
+        // Garante que todos os dados da sessão são salvos antes do redirecionamento.
         session_write_close();
         
         header('Location: ' . $redirect_url);
@@ -350,7 +370,9 @@ if (!function_exists('render_app_layout')) {
 if (!function_exists('render_login_page')) {
     function render_login_page($data) {
         render_header('Login');
-        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php?page=login"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
+        // CORREÇÃO: A ação do formulário deve apontar para o script principal (index.php)
+        // sem parâmetros GET, para garantir um processamento limpo do POST.
+        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
         render_footer();
     }
 }
@@ -604,16 +626,22 @@ if (!function_exists('render_custom_templates_page')) {
 
 if (!function_exists('render_error_page')) {
     function render_error_page($title, $message) {
-        render_header("Erro");
+        // Assegura que o cabeçalho não foi enviado antes de renderizar a página de erro.
+        if (!headers_sent()) {
+            render_header("Erro");
+        }
         ?>
         <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
             <div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-lg text-center">
                 <h1 class="text-3xl font-bold text-red-600 mb-2"><?= htmlspecialchars($title) ?></h1>
-                <p class="text-gray-600 text-left"><?= $message ?></p>
+                <div class="text-gray-600 text-left p-4 bg-gray-50 rounded-lg border border-gray-200"><?= $message ?></div>
             </div>
         </div>
         <?php
-        render_footer();
+        // Assegura que o rodapé é renderizado
+        if (!headers_sent()) {
+           render_footer();
+        }
     }
 }
 
@@ -668,6 +696,8 @@ if ($page === 'login') {
 } else {
     // Se a página não existir ou o utilizador não tiver permissão, redireciona para o dashboard.
     // Isso evita páginas em branco ou erros de acesso.
-    render_app_layout('dashboard', 'render_dashboard_page', $all_data);
+    $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Acesso negado ou página não encontrada.'];
+    header('Location: index.php?page=dashboard');
+    exit;
 }
 ?>
