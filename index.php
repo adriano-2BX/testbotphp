@@ -87,7 +87,37 @@ if (!function_exists('get_data')) {
 }
 
 // --- FUNÇÕES DE AUTENTICAÇÃO E UTILITÁRIOS ---
-if (!function_exists('login')) { function login($email, $password) { $conn = get_db_connection(); $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?"); $stmt->bind_param("s", $email); $stmt->execute(); $result = $stmt->get_result(); if ($user = $result->fetch_assoc()) { if (password_verify($password, $user['password_hash'])) { unset($user['password_hash']); $_SESSION['user'] = $user; return true; } } return false; } }
+// CORREÇÃO: Função de login agora retorna um status específico para erros detalhados.
+if (!function_exists('login')) {
+    /**
+     * Tenta autenticar um utilizador.
+     * @return string Retorna 'success', 'user_not_found', ou 'wrong_password'.
+     */
+    function login($email, $password) {
+        $conn = get_db_connection();
+        $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+
+        if ($user = $result->fetch_assoc()) {
+            // Utilizador encontrado, agora verifica a senha.
+            if (password_verify($password, $user['password_hash'])) {
+                // Senha correta
+                unset($user['password_hash']);
+                $_SESSION['user'] = $user;
+                return 'success';
+            } else {
+                // Senha incorreta
+                return 'wrong_password';
+            }
+        } else {
+            // Utilizador não encontrado
+            return 'user_not_found';
+        }
+    }
+}
+
 if (!function_exists('logout')) { function logout() { session_destroy(); header('Location: index.php?page=login'); exit; } }
 if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']) && is_array($_SESSION['user']); } }
 
@@ -111,8 +141,6 @@ if (!function_exists('has_permission')) {
 }
 
 // --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
-// CORREÇÃO: A função foi reestruturada para ter um único ponto de redirecionamento,
-// tornando o fluxo mais claro e evitando a perda de mensagens de sessão.
 if (!function_exists('handle_post_requests')) {
     function handle_post_requests() {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -123,18 +151,23 @@ if (!function_exists('handle_post_requests')) {
         $action = $_POST['action'] ?? '';
         $user = get_current_user();
         
-        // Redirecionamento padrão é a própria página.
         $redirect_url = $_SERVER['REQUEST_URI'];
 
         try {
             switch ($action) {
+                // CORREÇÃO: Lógica de login agora usa os novos retornos para dar feedback específico.
                 case 'login':
-                    if (login($_POST['email'], $_POST['password'])) {
+                    $loginResult = login($_POST['email'], $_POST['password']);
+                    if ($loginResult === 'success') {
                         $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Login bem-sucedido!'];
-                        $redirect_url = 'index.php?page=dashboard'; // Redireciona para o dashboard em caso de sucesso.
+                        $redirect_url = 'index.php?page=dashboard';
                     } else {
-                        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.'];
-                        $redirect_url = 'index.php?page=login'; // Garante o redirecionamento para a página de login em caso de falha.
+                        if ($loginResult === 'wrong_password') {
+                            $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'A senha está incorreta. Por favor, tente novamente.'];
+                        } else { // 'user_not_found'
+                            $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Nenhum utilizador encontrado com esse e-mail.'];
+                        }
+                        $redirect_url = 'index.php?page=login';
                     }
                     break;
 
@@ -237,10 +270,8 @@ if (!function_exists('handle_post_requests')) {
             $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
 
-        // Garante que os dados da sessão são guardados antes de redirecionar.
         session_write_close();
         
-        // Ponto único de redirecionamento.
         header('Location: ' . $redirect_url);
         exit;
     }
@@ -323,7 +354,6 @@ if (!function_exists('render_app_layout')) {
     }
 }
 
-// CORREÇÃO: Adicionados atributos 'autocomplete' para melhorar a experiência do utilizador e remover avisos do browser.
 if (!function_exists('render_login_page')) {
     function render_login_page($data) {
         render_header('Login');
@@ -599,21 +629,30 @@ if (!function_exists('render_error_page')) {
 // Bloco de Execução Principal
 // =================================================================
 
-// Processa ações e popula o banco de dados se necessário
-seed_initial_templates();
+// É importante que o processamento do formulário ocorra antes de qualquer saída de HTML.
 handle_post_requests();
 
-// Roteamento
-$page = $_GET['page'] ?? 'dashboard';
+// Roteamento e Lógica de Página
+$page = $_GET['page'] ?? (is_logged_in() ? 'dashboard' : 'login');
+
 if ($page === 'logout') {
     logout();
 }
+
+// Se o utilizador não está logado, a única página que ele pode ver é a de login.
 if (!is_logged_in() && $page !== 'login') {
     header('Location: index.php?page=login');
     exit;
 }
 
-// Busca os dados atualizados para a renderização
+// Se o utilizador já está logado e tenta aceder à página de login, redireciona para o dashboard.
+if (is_logged_in() && $page === 'login') {
+    header('Location: index.php?page=dashboard');
+    exit;
+}
+
+// Popula o banco de dados e busca os dados ANTES de renderizar a página.
+seed_initial_templates();
 $all_data = get_data();
 
 // Mapa de páginas e permissões
@@ -634,7 +673,8 @@ if ($page === 'login') {
 } elseif (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
     render_app_layout($page, $pages[$page]['renderer'], $all_data);
 } else {
-    // Redireciona para o dashboard se a página for inválida ou sem permissão
+    // Se a página não existir ou o utilizador não tiver permissão, redireciona para o dashboard.
+    // Isso evita páginas em branco ou erros de acesso.
     render_app_layout('dashboard', 'render_dashboard_page', $all_data);
 }
 ?>
