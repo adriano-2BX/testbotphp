@@ -6,10 +6,16 @@ if (session_status() === PHP_SESSION_NONE) {
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
 /*
- * ATENÇÃO: A string de conexão foi atualizada para usar o hostname interno 'lab_mysql',
- * que é comum em ambientes de contentores como o EasyPanel/Docker.
+ * ATENÇÃO: As credenciais do banco de dados foram separadas em constantes
+ * individuais para facilitar a configuração e a depuração.
+ * Verifique se estes valores correspondem exatamente à configuração do seu ambiente (EasyPanel/Docker).
+ * O erro de conexão geralmente ocorre por um valor incorreto aqui.
  */
-define('DB_URL', 'mysql://mysql:bc86348b3cfea8e64566@lab_mysql:3306/testbot');
+define('DB_HOST', 'lab_mysql'); // Hostname do serviço do banco de dados (ex: 'lab_mysql' ou 'mysql')
+define('DB_USER', 'mysql');       // Utilizador do banco de dados
+define('DB_PASS', 'bc86348b3cfea8e64566'); // Senha do utilizador
+define('DB_NAME', 'testbot');     // Nome do banco de dados
+define('DB_PORT', 3306);          // Porta do banco de dados
 
 const PRESET_TESTS = [
     ['id' => 'GREETING', 'name' => "Saudação e Despedida", 'description' => "Verifica se o bot saúda, se apresenta e se despede corretamente.", 'formFields' => [['name' => 'didGreet', 'label' => 'Bot iniciou com uma saudação?', 'type' => 'tri-state'], ['name' => 'identifiedUser', 'label' => 'Identificou o nome do utilizador?', 'type' => 'tri-state'], ['name' => 'offeredHelp', 'label' => 'Ofereceu ajuda ou apresentou-se?', 'type' => 'tri-state'], ['name' => 'didFarewell', 'label' => 'Despediu-se cordialmente no final?', 'type' => 'tri-state'], ['name' => 'notes', 'label' => 'Observações Adicionais', 'type' => 'textarea']]],
@@ -24,25 +30,37 @@ const PRESET_TESTS = [
 
 // --- FUNÇÕES DE BANCO DE DADOS ---
 if (!function_exists('get_db_connection')) {
+    /**
+     * Estabelece e retorna uma conexão com o banco de dados.
+     * A função foi modificada para usar as constantes DB_HOST, DB_USER, etc., diretamente.
+     * Isso remove a necessidade de analisar uma URL, tornando o código mais limpo e menos propenso a erros.
+     */
     function get_db_connection() {
         static $conn;
         if ($conn === null) {
-            $db_parts = parse_url(DB_URL);
-            $db_host = $db_parts['host'] ?? null;
-            $db_user = $db_parts['user'] ?? null;
-            $db_pass = $db_parts['pass'] ?? null;
-            $db_name = isset($db_parts['path']) ? ltrim($db_parts['path'], '/') : null;
-            $db_port = $db_parts['port'] ?? 3306;
-
+            // Desativa a notificação de erros do MySQLi para lidar com eles manualmente.
             mysqli_report(MYSQLI_REPORT_OFF);
-            $conn = @new mysqli($db_host, $db_user, $db_pass, $db_name, $db_port);
 
+            // Tenta criar uma nova conexão usando as constantes definidas.
+            // O '@' suprime o aviso de erro padrão do PHP, pois estamos a tratar o erro abaixo.
+            $conn = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT);
+
+            // Verifica se ocorreu um erro na conexão.
             if ($conn->connect_error) {
+                // Regista o erro detalhado no log de erros do servidor para depuração.
                 error_log("DB Connection Error: " . $conn->connect_error);
-                render_error_page("Erro de Conexão com o Banco de Dados", "Não foi possível conectar ao servidor de banco de dados. Verifique as credenciais e se o servidor está acessível.");
+                
+                // Mostra uma página de erro amigável para o utilizador.
+                render_error_page(
+                    "Erro de Conexão com o Banco de Dados",
+                    "Não foi possível conectar ao servidor de banco de dados. Verifique as credenciais e se o servidor está acessível."
+                );
+                
+                // Interrompe a execução do script.
                 exit;
             }
             
+            // Define o conjunto de caracteres da conexão para utf8mb4 para suportar emojis e caracteres especiais.
             $conn->set_charset("utf8mb4");
         }
         return $conn;
