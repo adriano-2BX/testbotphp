@@ -1,11 +1,12 @@
 <?php
 // Inicia a sessão no topo de todas as páginas. Essencial para autenticação.
-session_start();
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
-// --- CONFIGURAÇÃO DO BANCO DE DADOS ---
+// --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
 define('DB_URL', 'mysql://mysql:bc86348b3cfea8e64566@server.2bx.com.br:3306/testbot');
 
-// --- CONSTANTES GLOBAIS ---
 const PRESET_TESTS = [
     ['id' => 'GREETING', 'name' => "Saudação e Despedida", 'description' => "Verifica se o bot saúda, se apresenta e se despede corretamente.", 'formFields' => [['name' => 'didGreet', 'label' => 'Bot iniciou com uma saudação?', 'type' => 'tri-state'], ['name' => 'identifiedUser', 'label' => 'Identificou o nome do utilizador?', 'type' => 'tri-state'], ['name' => 'offeredHelp', 'label' => 'Ofereceu ajuda ou apresentou-se?', 'type' => 'tri-state'], ['name' => 'didFarewell', 'label' => 'Despediu-se cordialmente no final?', 'type' => 'tri-state'], ['name' => 'notes', 'label' => 'Observações Adicionais', 'type' => 'textarea']]],
     ['id' => 'INTENT_RECOGNITION', 'name' => "Reconhecimento de Intenção", 'description' => "Avalia a capacidade do bot de compreender a intenção principal do utilizador.", 'formFields' => [['name' => 'userQuestion', 'label' => 'Pergunta/Frase do Utilizador', 'type' => 'textarea'], ['name' => 'expectedIntent', 'label' => 'Intenção Esperada', 'type' => 'text'], ['name' => 'botResponse', 'label' => 'Resposta do Bot', 'type' => 'textarea'], ['name' => 'result', 'label' => 'Resultado', 'type' => 'select', 'options' => ['Correto', 'Incorreto', 'Parcialmente Correto']]]],
@@ -15,7 +16,6 @@ const PRESET_TESTS = [
 
 // =================================================================
 // Bloco de Definição de Funções
-// Todas as funções são declaradas aqui antes de qualquer execução.
 // =================================================================
 
 // --- FUNÇÕES DE BANCO DE DADOS ---
@@ -24,14 +24,22 @@ if (!function_exists('get_db_connection')) {
         static $conn;
         if ($conn === null) {
             $db_parts = parse_url(DB_URL);
-            mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
-            try {
-                $conn = new mysqli($db_parts['host'], $db_parts['user'], $db_parts['pass'], ltrim($db_parts['path'], '/'), $db_parts['port']);
-                $conn->set_charset("utf8mb4");
-            } catch (mysqli_sql_exception $e) {
-                error_log("DB Connection Error: " . $e->getMessage());
-                die("Erro: Não foi possível conectar ao banco de dados.");
+            $db_host = $db_parts['host'] ?? null;
+            $db_user = $db_parts['user'] ?? null;
+            $db_pass = $db_parts['pass'] ?? null;
+            $db_name = isset($db_parts['path']) ? ltrim($db_parts['path'], '/') : null;
+            $db_port = $db_parts['port'] ?? 3306;
+
+            mysqli_report(MYSQLI_REPORT_OFF);
+            $conn = @new mysqli($db_host, $db_user, $db_pass, $db_name, $db_port);
+
+            if ($conn->connect_error) {
+                error_log("DB Connection Error: " . $conn->connect_error);
+                render_error_page("Erro de Conexão com o Banco de Dados", "Não foi possível conectar ao servidor de banco de dados. Verifique as credenciais e se o servidor está acessível.");
+                exit;
             }
+            
+            $conn->set_charset("utf8mb4");
         }
         return $conn;
     }
@@ -61,62 +69,22 @@ if (!function_exists('get_data')) {
             'users' => $conn->query("SELECT id, name, email, role FROM users ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
             'test_templates' => [], 'test_cases' => [], 'reports' => [],
         ];
-        $templates_result = $conn->query("SELECT * FROM test_templates ORDER BY name ASC");
+        $templates_result = $conn->query("SELECT * FROM test_templates ORDER BY created_at DESC, name ASC");
         while ($row = $templates_result->fetch_assoc()) { $row['formFields'] = json_decode($row['form_fields'], true); $data['test_templates'][] = $row; }
-        $test_cases_result = $conn->query("SELECT * FROM test_cases");
-        while ($row = $test_cases_result->fetch_assoc()) { $row['custom_fields'] = json_decode($row['custom_fields'], true); $row['paused_state'] = json_decode($row['paused_state'], true); $data['test_cases'][] = $row; }
-        $reports_result = $conn->query("SELECT * FROM reports");
+        $test_cases_result = $conn->query("SELECT * FROM test_cases ORDER BY created_at DESC");
+        while ($row = $test_cases_result->fetch_assoc()) { $row['custom_fields'] = json_decode($row['custom_fields'] ?? '[]', true); $row['paused_state'] = json_decode($row['paused_state'] ?? '[]', true); $data['test_cases'][] = $row; }
+        $reports_result = $conn->query("SELECT * FROM reports ORDER BY execution_date DESC");
         while ($row = $reports_result->fetch_assoc()) { $row['results'] = json_decode($row['results'], true); $data['reports'][] = $row; }
         return $data;
     }
 }
 
-// --- FUNÇÕES DE AUTENTICAÇÃO ---
-if (!function_exists('login')) {
-    function login($email, $password) {
-        $conn = get_db_connection();
-        $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?");
-        $stmt->bind_param("s", $email);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        if ($user = $result->fetch_assoc()) {
-            if (password_verify($password, $user['password_hash'])) {
-                unset($user['password_hash']);
-                $_SESSION['user'] = $user;
-                return true;
-            }
-        }
-        return false;
-    }
-}
-
-if (!function_exists('logout')) {
-    function logout() {
-        session_destroy();
-        header('Location: index.php?page=login');
-        exit;
-    }
-}
-
-if (!function_exists('is_logged_in')) {
-    function is_logged_in() {
-        return isset($_SESSION['user']);
-    }
-}
-
-if (!function_exists('get_current_user')) {
-    function get_current_user() {
-        return $_SESSION['user'] ?? null;
-    }
-}
-
-if (!function_exists('has_permission')) {
-    function has_permission($roles) {
-        $user = get_current_user();
-        if (!$user) return false;
-        return in_array($user['role'], (array)$roles);
-    }
-}
+// --- FUNÇÕES DE AUTENTICAÇÃO E UTILITÁRIOS ---
+if (!function_exists('login')) { function login($email, $password) { $conn = get_db_connection(); $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?"); $stmt->bind_param("s", $email); $stmt->execute(); $result = $stmt->get_result(); if ($user = $result->fetch_assoc()) { if (password_verify($password, $user['password_hash'])) { unset($user['password_hash']); $_SESSION['user'] = $user; return true; } } return false; } }
+if (!function_exists('logout')) { function logout() { session_destroy(); header('Location: index.php?page=login'); exit; } }
+if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']); } }
+if (!function_exists('get_current_user')) { function get_current_user() { return $_SESSION['user'] ?? null; } }
+if (!function_exists('has_permission')) { function has_permission($roles) { $user = get_current_user(); if (!$user) return false; return in_array($user['role'], (array)$roles); } }
 
 // --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
 if (!function_exists('handle_post_requests')) {
@@ -127,21 +95,11 @@ if (!function_exists('handle_post_requests')) {
         $user = get_current_user();
         try {
             switch ($action) {
-                case 'login':
-                    if (login($_POST['email'], $_POST['password'])) { header('Location: index.php?page=dashboard'); exit; }
-                    $_SESSION['error'] = 'Credenciais inválidas.'; header('Location: index.php?page=login'); exit;
-                case 'add_client':
-                    if (has_permission('admin')) { $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)"); $stmt->bind_param("s", $_POST['name']); $stmt->execute(); }
-                    break;
-                case 'add_project':
-                    if (has_permission('admin')) { $p = $_POST['project']; $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']); $stmt->execute(); }
-                    break;
-                case 'add_user':
-                    if (has_permission('admin')) { $u = $_POST['user']; $password_hash = password_hash($u['password'], PASSWORD_DEFAULT); $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"); $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']); $stmt->execute(); }
-                    break;
-                case 'add_test':
-                    if (has_permission('admin')) { $t = $_POST['test']; $test_id = 'TEST-' . time(); $custom_fields_json = $_POST['customFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json); $stmt->execute(); }
-                    break;
+                case 'login': if (login($_POST['email'], $_POST['password'])) { $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Login bem-sucedido!']; header('Location: index.php?page=dashboard'); exit; } $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.']; header('Location: index.php?page=login'); exit;
+                case 'add_client': if (has_permission('admin')) { $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)"); $stmt->bind_param("s", $_POST['name']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Cliente adicionado com sucesso!']; } break;
+                case 'add_project': if (has_permission('admin')) { $p = $_POST['project']; $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Projeto adicionado com sucesso!']; } break;
+                case 'add_user': if (has_permission('admin')) { $u = $_POST['user']; $password_hash = password_hash($u['password'], PASSWORD_DEFAULT); $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"); $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Utilizador adicionado com sucesso!']; } break;
+                case 'add_test': if (has_permission('admin')) { $t = $_POST['test']; $test_id = 'TEST-' . time(); $custom_fields_json = $_POST['customFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Caso de teste criado com sucesso!']; } break;
                 case 'execute_test':
                     if (has_permission('tester')) {
                         $testCaseId = $_POST['test_case_id']; $resultsJson = json_encode($_POST['results']); $reportId = 'REP-' . time(); $executionDate = date('Y-m-d H:i:s');
@@ -149,22 +107,17 @@ if (!function_exists('handle_post_requests')) {
                         $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?"); $stmt_update->bind_param("s", $testCaseId); $stmt_update->execute();
                         $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)"); $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson); $stmt_insert->execute();
                         $conn->commit();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste concluído e relatório gerado!'];
                     }
                     break;
-                case 'pause_test':
-                    if (has_permission('tester')) { $pausedStateJson = json_encode($_POST['results']); $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?"); $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']); $stmt->execute(); }
-                    break;
-                case 'resume_test':
-                     if (has_permission('tester')) { $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?"); $stmt->bind_param("s", $_POST['test_case_id']); $stmt->execute(); }
-                    break;
-                case 'add_custom_template':
-                    if (has_permission('admin')) { $t = $_POST['template']; $template_id = 'CUSTOM-' . time(); $form_fields_json = $_POST['formFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)"); $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json); $stmt->execute(); }
-                    break;
+                case 'pause_test': if (has_permission('tester')) { $pausedStateJson = json_encode($_POST['results']); $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?"); $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste pausado com sucesso.']; } break;
+                case 'resume_test': if (has_permission('tester')) { $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?"); $stmt->bind_param("s", $_POST['test_case_id']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'info', 'message' => 'Teste retomado.']; } break;
+                case 'add_custom_template': if (has_permission('admin')) { $t = $_POST['template']; $template_id = 'CUSTOM-' . time(); $form_fields_json = $_POST['formFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)"); $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Modelo personalizado criado com sucesso!']; } break;
             }
         } catch (mysqli_sql_exception $e) {
             error_log("SQL Error: " . $e->getMessage());
             if ($conn->in_transaction) { $conn->rollback(); }
-            $_SESSION['error_message'] = "Ocorreu um erro ao processar sua solicitação.";
+            $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
         header('Location: ' . $_SERVER['REQUEST_URI']);
         exit;
@@ -196,14 +149,30 @@ if (!function_exists('render_footer')) {
     }
 }
 
+if (!function_exists('render_flash_message')) {
+    function render_flash_message() {
+        if (isset($_SESSION['flash_message'])) {
+            $flash = $_SESSION['flash_message'];
+            $colors = [
+                'success' => 'bg-green-100 border-green-500 text-green-700',
+                'error' => 'bg-red-100 border-red-500 text-red-700',
+                'info' => 'bg-blue-100 border-blue-500 text-blue-700'
+            ];
+            $colorClass = $colors[$flash['type']] ?? $colors['info'];
+            echo '<div class="' . $colorClass . ' border-l-4 p-4 mb-4 rounded-r-lg" role="alert"><p>' . htmlspecialchars($flash['message']) . '</p></div>';
+            unset($_SESSION['flash_message']);
+        }
+    }
+}
+
 if (!function_exists('render_app_layout')) {
     function render_app_layout($page, callable $content_renderer, $all_data) {
         $user = get_current_user();
-        $pageTitles = ['dashboard' => "Dashboard", 'test-management' => "Gerenciar Testes", 'user-management' => "Gerenciar Usuários", 'reports' => "Relatórios", 'client-management' => "Gerenciar Clientes", 'project-management' => "Gerenciar Projetos", 'test-guidelines' => "Orientações de Teste", 'custom-templates' => "Modelos de Teste"];
+        $pageTitles = ['dashboard' => "Dashboard", 'test-management' => "Gerir Testes", 'user-management' => "Gerir Utilizadores", 'reports' => "Relatórios", 'client-management' => "Gerir Clientes", 'project-management' => "Gerir Projetos", 'test-guidelines' => "Orientações de Teste", 'custom-templates' => "Modelos Personalizados"];
         $title = $pageTitles[$page] ?? 'Detalhes';
         render_header($title);
         $navItems = [
-            'admin' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Clientes", 'path' => "client-management", 'icon' => BuildingIcon()],['name' => "Projetos", 'path' => "project-management", 'icon' => FolderIcon()],['name' => "Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Usuários", 'path' => "user-management", 'icon' => UsersIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Modelos", 'path' => "custom-templates", 'icon' => BeakerIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
+            'admin' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Clientes", 'path' => "client-management", 'icon' => BuildingIcon()],['name' => "Projetos", 'path' => "project-management", 'icon' => FolderIcon()],['name' => "Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Utilizadores", 'path' => "user-management", 'icon' => UsersIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Modelos", 'path' => "custom-templates", 'icon' => BeakerIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
             'tester' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Meus Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
             'client' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
         ];
@@ -212,13 +181,13 @@ if (!function_exists('render_app_layout')) {
         <div class="h-screen w-screen flex flex-col sm:flex-row bg-gray-100">
             <div class="hidden sm:flex flex-col w-64 bg-white border-r border-gray-200 p-4">
                 <h1 class="text-2xl font-bold text-cyan-600 mb-10 px-2">TestBot</h1>
-                <nav class="flex-1 space-y-2"><?php foreach ($userNav as $item): $isActive = $page === $item['path']; ?><a href="index.php?page=<?= $item['path'] ?>" class="w-full flex items-center gap-3 text-left py-2.5 px-4 rounded-lg transition-colors text-base font-semibold <?= $isActive ? 'bg-cyan-500 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100' ?>"><?= $item['icon']('class="w-5 h-5"') ?><?= $item['name'] ?></a><?php endforeach; ?></nav>
+                <nav class="flex-1 space-y-2"><?php foreach ($userNav as $item): $isActive = $page === $item['path']; ?><a href="index.php?page=<?= $item['path'] ?>" class="w-full flex items-center gap-3 text-left py-2.5 px-4 rounded-lg transition-colors text-base font-semibold <?= $isActive ? 'bg-cyan-500 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100' ?>"><?= $item['icon']('class="w-5 h-5"') ?><?= htmlspecialchars($item['name']) ?></a><?php endforeach; ?></nav>
                 <div class="pt-6 border-t border-gray-200"><p class="text-sm font-semibold text-gray-800"><?= htmlspecialchars($user['name']) ?></p><p class="text-xs text-gray-500 capitalize"><?= htmlspecialchars($user['role']) ?></p></div>
             </div>
             <div class="flex-1 flex flex-col overflow-hidden">
                 <header class="bg-white/80 backdrop-blur-lg border-b border-gray-200 w-full z-10"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div class="flex items-center justify-between h-16"><h1 class="text-lg font-bold text-gray-800"><?= htmlspecialchars($title) ?></h1><a href="index.php?page=logout" class="hidden sm:flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-red-500"><?= LogOutIcon('class="w-5 h-5"') ?>Sair</a></div></div></header>
-                <main class="flex-1 overflow-y-auto content-scrollable p-4 sm:p-6 pb-24 sm:pb-6"><?php $content_renderer($all_data); ?></main>
-                <nav class="sm:hidden fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-gray-200 z-20"><div class="flex justify-around items-center h-16"><?php foreach ($userNav as $item): if(count($userNav) > 4 && $item['name'] === 'Orientações') continue; $isActive = $page === $item['path']; ?><a href="index.php?page=<?= $item['path'] ?>" class="flex flex-col items-center justify-center w-full h-full transition-colors <?= $isActive ? 'text-cyan-500' : 'text-gray-500 hover:text-cyan-500' ?>"><?= $item['icon']('class="w-6 h-6 mb-1"') ?><span class="text-xs font-medium"><?= $item['name'] ?></span></a><?php endforeach; ?><a href="index.php?page=logout" class="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-red-500"><?= LogOutIcon('class="w-6 h-6 mb-1"') ?><span class="text-xs font-medium">Sair</span></a></div></nav>
+                <main class="flex-1 overflow-y-auto content-scrollable p-4 sm:p-6 pb-24 sm:pb-6"><?php render_flash_message(); $content_renderer($all_data); ?></main>
+                <nav class="sm:hidden fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-lg border-t border-gray-200 z-20"><div class="flex justify-around items-center h-16"><?php foreach ($userNav as $item): if(count($userNav) > 4 && $item['name'] === 'Orientações') continue; $isActive = $page === $item['path']; ?><a href="index.php?page=<?= $item['path'] ?>" class="flex flex-col items-center justify-center w-full h-full transition-colors <?= $isActive ? 'text-cyan-500' : 'text-gray-500 hover:text-cyan-500' ?>"><?= $item['icon']('class="w-6 h-6 mb-1"') ?><span class="text-xs font-medium"><?= htmlspecialchars($item['name']) ?></span></a><?php endforeach; ?><a href="index.php?page=logout" class="flex flex-col items-center justify-center w-full h-full text-gray-500 hover:text-red-500"><?= LogOutIcon('class="w-6 h-6 mb-1"') ?><span class="text-xs font-medium">Sair</span></a></div></nav>
             </div>
         </div>
         <?php render_footer();
@@ -228,7 +197,7 @@ if (!function_exists('render_app_layout')) {
 if (!function_exists('render_login_page')) {
     function render_login_page($data) {
         render_header('Login');
-        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><?php if (isset($_SESSION['error'])): ?><p class="text-red-500 text-sm text-center mb-4"><?= $_SESSION['error'] ?></p><?php unset($_SESSION['error']); endif; ?><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
+        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
         render_footer();
     }
 }
@@ -256,8 +225,8 @@ if (!function_exists('render_management_page')) {
     function render_management_page($title, $item_name, $items, callable $render_item, callable $render_form) {
         ?>
         <div class="space-y-6">
-            <details class="bg-white rounded-xl shadow-sm"><summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Adicionar Novo <?= $item_name ?></span><?= PlusIcon('w-5 h-5') ?></summary><div class="p-4 sm:p-6 border-t"><?php $render_form(); ?></div></details>
-            <div class="bg-white rounded-xl shadow-sm p-4 sm:p-6"><h3 class="font-bold text-lg mb-4"><?= $title ?></h3><div class="space-y-3">
+            <details class="bg-white rounded-xl shadow-sm"><summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Adicionar Novo <?= htmlspecialchars($item_name) ?></span><?= PlusIcon('w-5 h-5') ?></summary><div class="p-4 sm:p-6 border-t"><?php $render_form(); ?></div></details>
+            <div class="bg-white rounded-xl shadow-sm p-4 sm:p-6"><h3 class="font-bold text-lg mb-4"><?= htmlspecialchars($title) ?></h3><div class="space-y-3">
             <?php if (empty($items)): ?><p class="text-gray-500">Nenhum item encontrado.</p>
             <?php else: foreach ($items as $item): $render_item($item); endforeach; endif; ?>
             </div></div>
@@ -284,7 +253,7 @@ if (!function_exists('render_project_management_page')) {
             },
             function() use ($data) { ?>
                 <form method="POST" class="space-y-4"><input type="hidden" name="action" value="add_project"><input type="text" name="project[name]" placeholder="Nome do Projeto" required class="w-full p-3 bg-gray-50 border rounded-lg"><input type="text" name="project[whatsappNumber]" placeholder="Nº de WhatsApp" required class="w-full p-3 bg-gray-50 border rounded-lg"><textarea name="project[description]" placeholder="Descrição" class="w-full p-3 bg-gray-50 border rounded-lg min-h-[80px]"></textarea><textarea name="project[objective]" placeholder="Objetivo" class="w-full p-3 bg-gray-50 border rounded-lg min-h-[80px]"></textarea><select name="project[clientId]" required class="w-full p-3 bg-gray-50 border rounded-lg"><option value="">Selecione um Cliente</option>
-                <?php foreach($data['clients'] as $c) echo '<option value="'.$c['id'].'">'.htmlspecialchars($c['name']).'</option>'; ?>
+                <?php foreach($data['clients'] as $c) echo '<option value="'.htmlspecialchars($c['id']).'">'.htmlspecialchars($c['name']).'</option>'; ?>
                 </select><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Salvar Projeto</button></form>
             <?php }
         );
@@ -293,10 +262,10 @@ if (!function_exists('render_project_management_page')) {
 
 if (!function_exists('render_user_management_page')) {
     function render_user_management_page($data) {
-        render_management_page('Usuários', 'Usuário', $data['users'],
+        render_management_page('Utilizadores', 'Utilizador', $data['users'],
             function($u) { echo '<div class="bg-gray-50 rounded-lg p-4 flex justify-between items-center"><div><p class="font-semibold">'.htmlspecialchars($u['name']).'</p><p class="text-sm text-gray-500">'.htmlspecialchars($u['email']).'</p></div><span class="px-2 py-1 text-xs font-semibold rounded-full bg-indigo-100 text-indigo-800 capitalize">'.htmlspecialchars($u['role']).'</span></div>'; },
             function() { ?>
-                <form method="POST" class="space-y-4"><input type="hidden" name="action" value="add_user"><input type="text" name="user[name]" placeholder="Nome Completo" required class="w-full p-3 bg-gray-50 border rounded-lg"><input type="email" name="user[email]" placeholder="Email" required class="w-full p-3 bg-gray-50 border rounded-lg"><input type="password" name="user[password]" placeholder="Senha" required class="w-full p-3 bg-gray-50 border rounded-lg"><select name="user[role]" required class="w-full p-3 bg-gray-50 border rounded-lg"><option value="tester">Tester</option><option value="client">Cliente</option><option value="admin">Admin</option></select><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Salvar Usuário</button></form>
+                <form method="POST" class="space-y-4"><input type="hidden" name="action" value="add_user"><input type="text" name="user[name]" placeholder="Nome Completo" required class="w-full p-3 bg-gray-50 border rounded-lg"><input type="email" name="user[email]" placeholder="Email" required class="w-full p-3 bg-gray-50 border rounded-lg"><input type="password" name="user[password]" placeholder="Senha" required class="w-full p-3 bg-gray-50 border rounded-lg"><select name="user[role]" required class="w-full p-3 bg-gray-50 border rounded-lg"><option value="tester">Tester</option><option value="client">Cliente</option><option value="admin">Admin</option></select><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Salvar Utilizador</button></form>
             <?php }
         );
     }
@@ -310,21 +279,20 @@ if (!function_exists('render_test_management_page')) {
         ?>
         <div class="space-y-6">
             <?php if (has_permission('admin')): ?>
-            <details class="bg-white rounded-xl shadow-sm">
-                <summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Criar Novo Teste</span><?= PlusIcon('w-5 h-5') ?></summary>
+            <details class="bg-white rounded-xl shadow-sm"><summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Criar Novo Teste</span><?= PlusIcon('w-5 h-5') ?></summary>
                 <div class="p-4 sm:p-6 border-t">
                     <form method="POST" id="form-create-test" class="space-y-4">
                         <input type="hidden" name="action" value="add_test">
                         <select id="client-select" class="w-full p-3 bg-gray-50 border rounded-lg"><option value="">1. Selecione um Cliente</option>
-                            <?php foreach($data['clients'] as $c) echo '<option value="'.$c['id'].'">'.htmlspecialchars($c['name']).'</option>'; ?>
+                            <?php foreach($data['clients'] as $c) echo '<option value="'.htmlspecialchars($c['id']).'">'.htmlspecialchars($c['name']).'</option>'; ?>
                         </select>
                         <select name="test[projectId]" id="project-select" required class="w-full p-3 bg-gray-50 border rounded-lg disabled:bg-gray-200" disabled><option value="">2. Selecione um Projeto</option></select>
                         <select name="test[typeId]" required class="w-full p-3 bg-gray-50 border rounded-lg"><option value="">3. Selecione o Tipo de Teste</option>
-                            <optgroup label="Modelos Predefinidos"><?php foreach(array_filter($data['test_templates'], fn($t) => !$t['is_custom']) as $pt) echo '<option value="'.$pt['id'].'">'.htmlspecialchars($pt['name']).'</option>'; ?></optgroup>
-                            <?php if(!empty(array_filter($data['test_templates'], fn($t) => $t['is_custom']))): ?><optgroup label="Modelos Personalizados"><?php foreach(array_filter($data['test_templates'], fn($t) => $t['is_custom']) as $ct) echo '<option value="'.$ct['id'].'">'.htmlspecialchars($ct['name']).'</option>'; ?></optgroup><?php endif; ?>
+                            <optgroup label="Modelos Predefinidos"><?php foreach(array_filter($data['test_templates'], fn($t) => !$t['is_custom']) as $pt) echo '<option value="'.htmlspecialchars($pt['id']).'">'.htmlspecialchars($pt['name']).'</option>'; ?></optgroup>
+                            <?php if(!empty(array_filter($data['test_templates'], fn($t) => $t['is_custom']))): ?><optgroup label="Modelos Personalizados"><?php foreach(array_filter($data['test_templates'], fn($t) => $t['is_custom']) as $ct) echo '<option value="'.htmlspecialchars($ct['id']).'">'.htmlspecialchars($ct['name']).'</option>'; ?></optgroup><?php endif; ?>
                         </select>
                         <select name="test[assignedTo]" required class="w-full p-3 bg-gray-50 border rounded-lg"><option value="">4. Atribuir a um Testador</option>
-                            <?php foreach(array_filter($data['users'], fn($u) => $u['role'] === 'tester') as $u) echo '<option value="'.$u['id'].'">'.htmlspecialchars($u['name']).'</option>'; ?>
+                            <?php foreach(array_filter($data['users'], fn($u) => $u['role'] === 'tester') as $u) echo '<option value="'.htmlspecialchars($u['id']).'">'.htmlspecialchars($u['name']).'</option>'; ?>
                         </select>
                         <input type="hidden" name="customFields" id="custom-fields-json">
                         <button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Adicionar Teste</button>
@@ -349,28 +317,28 @@ if (!function_exists('render_test_management_page')) {
                 $project = current(array_filter($data['projects'], fn($p) => $p['id'] === $tc['project_id'])) ?: [];
                 $client = current(array_filter($data['clients'], fn($c) => $c['id'] == ($project['client_id'] ?? null))) ?: [];
             ?>
-                <div class="bg-white rounded-xl shadow-sm overflow-hidden" id="test-<?= $tc['id'] ?>"><div class="p-4"><div class="flex justify-between items-start"><div><p class="text-xs font-semibold text-cyan-600"><?= htmlspecialchars($client['name'] ?? 'N/A') ?></p><h3 class="font-bold text-gray-800"><?= htmlspecialchars($preset['name'] ?? 'N/A') ?></h3><p class="text-sm text-gray-500"><?= htmlspecialchars($project['name'] ?? 'N/A') ?> - <?= htmlspecialchars($project['whatsapp_number'] ?? 'N/A') ?></p></div><span class="px-2.5 py-0.5 text-xs font-semibold rounded-full <?= $statusStyles[$tc['status']] ?>"><?= $tc['status'] ?></span></div><p class="text-sm text-gray-600 mt-2"><?= htmlspecialchars($preset['description'] ?? 'N/A') ?></p>
+                <div class="bg-white rounded-xl shadow-sm overflow-hidden" id="test-<?= htmlspecialchars($tc['id']) ?>"><div class="p-4"><div class="flex justify-between items-start"><div><p class="text-xs font-semibold text-cyan-600"><?= htmlspecialchars($client['name'] ?? 'N/A') ?></p><h3 class="font-bold text-gray-800"><?= htmlspecialchars($preset['name'] ?? 'N/A') ?></h3><p class="text-sm text-gray-500"><?= htmlspecialchars($project['name'] ?? 'N/A') ?> - <?= htmlspecialchars($project['whatsapp_number'] ?? 'N/A') ?></p></div><span class="px-2.5 py-0.5 text-xs font-semibold rounded-full <?= $statusStyles[$tc['status']] ?>"><?= htmlspecialchars($tc['status']) ?></span></div><p class="text-sm text-gray-600 mt-2"><?= htmlspecialchars($preset['description'] ?? 'N/A') ?></p>
                     <?php if (has_permission('tester') && $tc['status'] !== 'completed'): ?>
                     <div class="pt-4 mt-4 border-t border-gray-200">
-                        <?php if ($tc['status'] === 'pending'): ?><button onclick="document.getElementById('exec-form-<?= $tc['id'] ?>').style.display='block'; this.style.display='none';" class="w-full bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition font-semibold text-sm">Iniciar Execução</button>
-                        <?php elseif ($tc['status'] === 'paused'): ?><form method="POST" style="display:inline-block; width: 100%;"><input type="hidden" name="action" value="resume_test"><input type="hidden" name="test_case_id" value="<?= $tc['id'] ?>"><button type="submit" class="w-full bg-orange-500 text-white p-2 rounded-lg hover:bg-orange-600 transition font-semibold text-sm">Retomar Execução</button></form>
+                        <?php if ($tc['status'] === 'pending'): ?><button onclick="document.getElementById('exec-form-<?= htmlspecialchars($tc['id']) ?>').style.display='block'; this.style.display='none';" class="w-full bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition font-semibold text-sm">Iniciar Execução</button>
+                        <?php elseif ($tc['status'] === 'paused'): ?><form method="POST" style="display:inline-block; width: 100%;"><input type="hidden" name="action" value="resume_test"><input type="hidden" name="test_case_id" value="<?= htmlspecialchars($tc['id']) ?>"><button type="submit" class="w-full bg-orange-500 text-white p-2 rounded-lg hover:bg-orange-600 transition font-semibold text-sm">Retomar Execução</button></form>
                         <?php endif; ?>
                     </div>
                     <?php endif; ?>
                 </div>
-                <div id="exec-form-<?= $tc['id'] ?>" class="bg-gray-50 border-t border-gray-200 p-4 space-y-4" style="display:none;"><h4 class="font-bold text-gray-700">Executando: <?= htmlspecialchars($preset['name'] ?? '') ?></h4><form method="POST"><input type="hidden" name="test_case_id" value="<?= $tc['id'] ?>">
+                <div id="exec-form-<?= htmlspecialchars($tc['id']) ?>" class="bg-gray-50 border-t border-gray-200 p-4 space-y-4" style="display:none;"><h4 class="font-bold text-gray-700">Executando: <?= htmlspecialchars($preset['name'] ?? '') ?></h4><form method="POST"><input type="hidden" name="test_case_id" value="<?= htmlspecialchars($tc['id']) ?>">
                 <?php $allFields = array_merge($preset['formFields'] ?? [], $tc['custom_fields'] ?? []); $pausedState = $tc['paused_state'] ?? [];
                 foreach ($allFields as $field): ?>
                 <div><label class="block text-sm font-semibold text-gray-600 mb-1"><?= htmlspecialchars($field['label']) ?></label>
-                <?php if ($field['type'] === 'textarea'): ?><textarea name="results[<?= $field['name'] ?>]" class="w-full p-2 bg-white border rounded-lg text-sm"><?= htmlspecialchars($pausedState[$field['name']] ?? '') ?></textarea>
-                <?php elseif ($field['type'] === 'text'): ?><input type="text" name="results[<?= $field['name'] ?>]" value="<?= htmlspecialchars($pausedState[$field['name']] ?? '') ?>" class="w-full p-2 bg-white border rounded-lg text-sm">
-                <?php elseif ($field['type'] === 'select'): ?><select name="results[<?= $field['name'] ?>]" class="w-full p-2 bg-white border rounded-lg text-sm"><option value="">Selecione...</option>
+                <?php if ($field['type'] === 'textarea'): ?><textarea name="results[<?= htmlspecialchars($field['name']) ?>]" class="w-full p-2 bg-white border rounded-lg text-sm"><?= htmlspecialchars($pausedState[$field['name']] ?? '') ?></textarea>
+                <?php elseif ($field['type'] === 'text'): ?><input type="text" name="results[<?= htmlspecialchars($field['name']) ?>]" value="<?= htmlspecialchars($pausedState[$field['name']] ?? '') ?>" class="w-full p-2 bg-white border rounded-lg text-sm">
+                <?php elseif ($field['type'] === 'select'): ?><select name="results[<?= htmlspecialchars($field['name']) ?>]" class="w-full p-2 bg-white border rounded-lg text-sm"><option value="">Selecione...</option>
                     <?php foreach($field['options'] as $opt) echo '<option value="'.htmlspecialchars($opt).'" '.((($pausedState[$field['name']] ?? '') === $opt) ? 'selected' : '').'>'.htmlspecialchars($opt).'</option>'; ?>
                 </select>
-                <?php elseif ($field['type'] === 'tri-state'): ?><select name="results[<?= $field['name'] ?>]" class="w-full p-2 bg-white border rounded-lg text-sm"><option value="">Selecione...</option><option value="Sim" <?= (($pausedState[$field['name']] ?? '') === 'Sim') ? 'selected' : '' ?>>Sim</option><option value="Não" <?= (($pausedState[$field['name']] ?? '') === 'Não') ? 'selected' : '' ?>>Não</option><option value="N/A" <?= (($pausedState[$field['name']] ?? '') === 'N/A') ? 'selected' : '' ?>>Não se aplica</option></select>
+                <?php elseif ($field['type'] === 'tri-state'): ?><select name="results[<?= htmlspecialchars($field['name']) ?>]" class="w-full p-2 bg-white border rounded-lg text-sm"><option value="">Selecione...</option><option value="Sim" <?= (($pausedState[$field['name']] ?? '') === 'Sim') ? 'selected' : '' ?>>Sim</option><option value="Não" <?= (($pausedState[$field['name']] ?? '') === 'Não') ? 'selected' : '' ?>>Não</option><option value="N/A" <?= (($pausedState[$field['name']] ?? '') === 'N/A') ? 'selected' : '' ?>>Não se aplica</option></select>
                 <?php endif; ?></div>
                 <?php endforeach; ?>
-                <div class="flex gap-2 pt-4"><button type="button" onclick="document.getElementById('exec-form-<?= $tc['id'] ?>').style.display='none'; document.querySelector('#test-<?= $tc['id'] ?> button').style.display='block';" class="w-full bg-gray-200 text-gray-700 p-2 rounded-lg font-semibold text-sm">Cancelar</button><button type="submit" name="action" value="pause_test" class="w-full bg-yellow-500 text-white p-2 rounded-lg font-semibold text-sm">Pausar</button><button type="submit" name="action" value="execute_test" class="w-full bg-green-500 text-white p-2 rounded-lg font-semibold text-sm">Concluir</button></div></form></div></div>
+                <div class="flex gap-2 pt-4"><button type="button" onclick="document.getElementById('exec-form-<?= htmlspecialchars($tc['id']) ?>').style.display='none'; document.querySelector('#test-<?= htmlspecialchars($tc['id']) ?> button').style.display='block';" class="w-full bg-gray-200 text-gray-700 p-2 rounded-lg font-semibold text-sm">Cancelar</button><button type="submit" name="action" value="pause_test" class="w-full bg-yellow-500 text-white p-2 rounded-lg font-semibold text-sm">Pausar</button><button type="submit" name="action" value="execute_test" class="w-full bg-green-500 text-white p-2 rounded-lg font-semibold text-sm">Concluir</button></div></form></div></div>
             <?php endforeach; endif; ?>
             </div>
         </div>
@@ -393,7 +361,7 @@ if (!function_exists('render_reports_page')) {
             $client = current(array_filter($data['clients'], fn($c) => $c['id'] == ($project['client_id'] ?? null))) ?: [];
             $formattedDate = date('d/m/Y', strtotime($report['execution_date']));
         ?>
-        <div class="bg-white rounded-xl shadow-sm p-4 space-y-3"><div><h3 class="font-bold text-gray-800"><?= htmlspecialchars($preset['name'] ?? 'N/A') ?></h3><p class="text-sm text-gray-500"><?= htmlspecialchars($project['name'] ?? 'N/A') ?></p></div><div class="text-xs text-gray-600 space-y-1"><p><span class="font-semibold">Testador:</span> <?= htmlspecialchars($tester['name'] ?? 'N/A') ?></p><p><span class="font-semibold">Data:</span> <?= $formattedDate ?></p></div><div class="pt-3 border-t"><button onclick='openReportModal(<?= json_encode($report, JSON_HEX_APOS) ?>, <?= json_encode($testCase, JSON_HEX_APOS) ?>, <?= json_encode($preset, JSON_HEX_APOS) ?>, <?= json_encode($client, JSON_HEX_APOS) ?>, <?= json_encode($project, JSON_HEX_APOS) ?>, <?= json_encode($tester, JSON_HEX_APOS) ?>)' class="w-full bg-gray-100 text-gray-700 p-2 rounded-lg font-semibold text-sm">Ver Detalhes</button></div></div>
+        <div class="bg-white rounded-xl shadow-sm p-4 space-y-3"><div><h3 class="font-bold text-gray-800"><?= htmlspecialchars($preset['name'] ?? 'N/A') ?></h3><p class="text-sm text-gray-500"><?= htmlspecialchars($project['name'] ?? 'N/A') ?></p></div><div class="text-xs text-gray-600 space-y-1"><p><span class="font-semibold">Testador:</span> <?= htmlspecialchars($tester['name'] ?? 'N/A') ?></p><p><span class="font-semibold">Data:</span> <?= htmlspecialchars($formattedDate) ?></p></div><div class="pt-3 border-t"><button onclick='openReportModal(<?= json_encode($report, JSON_HEX_APOS) ?>, <?= json_encode($testCase, JSON_HEX_APOS) ?>, <?= json_encode($preset, JSON_HEX_APOS) ?>, <?= json_encode($client, JSON_HEX_APOS) ?>, <?= json_encode($project, JSON_HEX_APOS) ?>, <?= json_encode($tester, JSON_HEX_APOS) ?>)' class="w-full bg-gray-100 text-gray-700 p-2 rounded-lg font-semibold text-sm">Ver Detalhes</button></div></div>
         <?php endforeach; ?>
         </div>
         <?php endif; ?>
@@ -481,34 +449,44 @@ if (!function_exists('render_custom_templates_page')) {
     }
 }
 
+if (!function_exists('render_error_page')) {
+    function render_error_page($title, $message) {
+        render_header("Erro");
+        ?>
+        <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
+            <div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-lg text-center">
+                <h1 class="text-3xl font-bold text-red-600 mb-2"><?= htmlspecialchars($title) ?></h1>
+                <p class="text-gray-600"><?= htmlspecialchars($message) ?></p>
+            </div>
+        </div>
+        <?php
+        render_footer();
+    }
+}
+
+
 // =================================================================
 // Bloco de Execução Principal
-// O código abaixo é executado em cada requisição.
 // =================================================================
 
-// Garante que o DB seja populado com os templates iniciais
+// Processa ações e popula o banco de dados se necessário
 seed_initial_templates();
-// Processa quaisquer ações de formulário enviadas via POST
 handle_post_requests();
 
-// Define a página a ser renderizada
+// Roteamento
 $page = $_GET['page'] ?? 'dashboard';
-
-// Roteamento de Ações Especiais
 if ($page === 'logout') {
     logout();
 }
-
-// Proteção de Rota: força o login se não estiver logado
 if (!is_logged_in() && $page !== 'login') {
     header('Location: index.php?page=login');
     exit;
 }
 
-// Busca todos os dados do banco para a renderização da página
+// Busca os dados atualizados para a renderização
 $all_data = get_data();
 
-// Mapa de páginas, renderizadores e permissões
+// Mapa de páginas e permissões
 $pages = [
     'dashboard' => ['renderer' => 'render_dashboard_page', 'roles' => ['admin', 'tester', 'client']],
     'client-management' => ['renderer' => 'render_client_management_page', 'roles' => ['admin']],
@@ -520,13 +498,13 @@ $pages = [
     'custom-templates' => ['renderer' => 'render_custom_templates_page', 'roles' => ['admin']],
 ];
 
-// Lógica Final de Renderização
+// Renderiza a página correta
 if ($page === 'login') {
     render_login_page($all_data);
 } elseif (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
     render_app_layout($page, $pages[$page]['renderer'], $all_data);
 } else {
-    // Se a página não existe ou o usuário não tem permissão, redireciona para o dashboard
+    // Redireciona para o dashboard se a página for inválida ou sem permissão
     render_app_layout('dashboard', 'render_dashboard_page', $all_data);
 }
 ?>
