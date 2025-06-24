@@ -10,10 +10,10 @@ if (session_status() === PHP_SESSION_NONE) {
  * Verifique se estes valores correspondem exatamente à configuração do seu ambiente (EasyPanel/Docker).
  */
 define('DB_HOST', 'lab_mysql'); // Hostname do serviço do banco de dados (geralmente o nome do contentor)
-define('DB_USER', 'root');       // Utilizador do banco de dados (alterado para 'root')
+define('DB_USER', 'root');      // Utilizador do banco de dados (alterado para 'root')
 define('DB_PASS', 'd21d846891a08dfaa82b'); // Senha do utilizador root
-define('DB_NAME', 'testbot');     // Nome do banco de dados
-define('DB_PORT', 3306);          // Porta do banco de dados
+define('DB_NAME', 'testbot');      // Nome do banco de dados
+define('DB_PORT', 3306);           // Porta do banco de dados
 
 const PRESET_TESTS = [
     ['id' => 'GREETING', 'name' => "Saudação e Despedida", 'description' => "Verifica se o bot saúda, se apresenta e se despede corretamente.", 'formFields' => [['name' => 'didGreet', 'label' => 'Bot iniciou com uma saudação?', 'type' => 'tri-state'], ['name' => 'identifiedUser', 'label' => 'Identificou o nome do utilizador?', 'type' => 'tri-state'], ['name' => 'offeredHelp', 'label' => 'Ofereceu ajuda ou apresentou-se?', 'type' => 'tri-state'], ['name' => 'didFarewell', 'label' => 'Despediu-se cordialmente no final?', 'type' => 'tri-state'], ['name' => 'notes', 'label' => 'Observações Adicionais', 'type' => 'textarea']]],
@@ -260,8 +260,11 @@ if (!function_exists('handle_post_requests')) {
             $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
 
-        // CORREÇÃO: Removido 'session_write_close()' pois pode interferir com o redirecionamento.
-        // O PHP guarda a sessão automaticamente no final da execução do script (acionado pelo 'exit').
+        // CORREÇÃO: Garante que todos os dados da sessão são salvos antes do redirecionamento.
+        // Isso é crucial para que o estado de login (`$_SESSION['user']`) persista na próxima página,
+        // resolvendo o loop de login.
+        session_write_close();
+        
         header('Location: ' . $redirect_url);
         exit;
     }
@@ -347,7 +350,7 @@ if (!function_exists('render_app_layout')) {
 if (!function_exists('render_login_page')) {
     function render_login_page($data) {
         render_header('Login');
-        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
+        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php?page=login"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
         render_footer();
     }
 }
