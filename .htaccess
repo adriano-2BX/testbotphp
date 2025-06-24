@@ -1,0 +1,12 @@
+# Ativa o motor de reescrita de URL do Apache
+RewriteEngine On
+
+# Impede que as regras abaixo se apliquem a ficheiros ou diretórios que já existem.
+# Isto é crucial para que os seus ficheiros CSS, JavaScript e imagens carreguem corretamente.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+
+# Se as condições acima forem verdadeiras (o pedido não é para um ficheiro ou diretório real),
+# reescreve o pedido para ser tratado pelo seu script principal, index.php.
+# A flag [L] significa que esta é a última regra a ser processada.
+RewriteRule ^ index.php [L]
