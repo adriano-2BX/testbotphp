@@ -3,7 +3,6 @@
 session_start();
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS ---
-// Nota: Em um ambiente de produção, mova estas credenciais para um arquivo de configuração fora do diretório web.
 define('DB_URL', 'mysql://mysql:bc86348b3cfea8e64566@server.2bx.com.br:3306/testbot');
 
 // --- CONSTANTES GLOBAIS ---
@@ -14,39 +13,29 @@ const PRESET_TESTS = [
     ['id' => 'PROMPT_INJECTION', 'name' => "Segurança: Injeção de Prompt", 'description' => "Tenta manipular o bot com instruções maliciosas para ignorar as suas diretrizes originais.", 'formFields' => [['name' => 'injectionAttempt', 'label' => 'Tentativa de Injeção de Prompt', 'type' => 'textarea'], ['name' => 'wasResisted', 'label' => 'O bot resistiu à injeção?', 'type' => 'tri-state'], ['name' => 'botFinalResponse', 'label' => 'Resposta Final do Bot', 'type' => 'textarea']]],
 ];
 
+// =================================================================
+// Bloco de Definição de Funções
+// Todas as funções são declaradas aqui antes de qualquer execução.
+// =================================================================
+
 // --- FUNÇÕES DE BANCO DE DADOS ---
 
-/**
- * Estabelece uma conexão com o banco de dados usando o padrão Singleton.
- * @return mysqli|false
- */
 function get_db_connection() {
-    static $conn; // Conexão estática para reutilização
-
+    static $conn;
     if ($conn === null) {
         $db_parts = parse_url(DB_URL);
-        $db_host = $db_parts['host'];
-        $db_user = $db_parts['user'];
-        $db_pass = $db_parts['pass'];
-        $db_name = ltrim($db_parts['path'], '/');
-        $db_port = $db_parts['port'];
-
         mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
         try {
-            $conn = new mysqli($db_host, $db_user, $db_pass, $db_name, $db_port);
+            $conn = new mysqli($db_parts['host'], $db_parts['user'], $db_parts['pass'], ltrim($db_parts['path'], '/'), $db_parts['port']);
             $conn->set_charset("utf8mb4");
         } catch (mysqli_sql_exception $e) {
-            // Em caso de falha, exibe uma mensagem de erro genérica e encerra.
             error_log("DB Connection Error: " . $e->getMessage());
-            die("Erro: Não foi possível conectar ao banco de dados. Verifique a configuração e tente novamente mais tarde.");
+            die("Erro: Não foi possível conectar ao banco de dados.");
         }
     }
     return $conn;
 }
 
-/**
- * Popula a tabela 'test_templates' com os dados predefinidos se ela estiver vazia.
- */
 function seed_initial_templates() {
     $conn = get_db_connection();
     $result = $conn->query("SELECT COUNT(*) as count FROM test_templates WHERE is_custom = 0");
@@ -60,41 +49,20 @@ function seed_initial_templates() {
     }
 }
 
-/**
- * Busca todos os dados das tabelas e os retorna em um único array associativo.
- * @return array
- */
 function get_data() {
     $conn = get_db_connection();
     $data = [
         'clients' => $conn->query("SELECT * FROM clients ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
         'projects' => $conn->query("SELECT * FROM projects ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
         'users' => $conn->query("SELECT id, name, email, role FROM users ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
-        'test_templates' => [],
-        'test_cases' => [],
-        'reports' => [],
+        'test_templates' => [], 'test_cases' => [], 'reports' => [],
     ];
-
-    // Decodifica campos JSON
     $templates_result = $conn->query("SELECT * FROM test_templates ORDER BY name ASC");
-    while ($row = $templates_result->fetch_assoc()) {
-        $row['formFields'] = json_decode($row['form_fields'], true);
-        $data['test_templates'][] = $row;
-    }
-
+    while ($row = $templates_result->fetch_assoc()) { $row['formFields'] = json_decode($row['form_fields'], true); $data['test_templates'][] = $row; }
     $test_cases_result = $conn->query("SELECT * FROM test_cases");
-    while ($row = $test_cases_result->fetch_assoc()) {
-        $row['custom_fields'] = json_decode($row['custom_fields'], true);
-        $row['paused_state'] = json_decode($row['paused_state'], true);
-        $data['test_cases'][] = $row;
-    }
-    
+    while ($row = $test_cases_result->fetch_assoc()) { $row['custom_fields'] = json_decode($row['custom_fields'], true); $row['paused_state'] = json_decode($row['paused_state'], true); $data['test_cases'][] = $row; }
     $reports_result = $conn->query("SELECT * FROM reports");
-    while ($row = $reports_result->fetch_assoc()) {
-        $row['results'] = json_decode($row['results'], true);
-        $data['reports'][] = $row;
-    }
-
+    while ($row = $reports_result->fetch_assoc()) { $row['results'] = json_decode($row['results'], true); $data['reports'][] = $row; }
     return $data;
 }
 
@@ -106,10 +74,9 @@ function login($email, $password) {
     $stmt->bind_param("s", $email);
     $stmt->execute();
     $result = $stmt->get_result();
-
     if ($user = $result->fetch_assoc()) {
         if (password_verify($password, $user['password_hash'])) {
-            unset($user['password_hash']); // Remove o hash da sessão
+            unset($user['password_hash']);
             $_SESSION['user'] = $user;
             return true;
         }
@@ -137,137 +104,57 @@ function has_permission($roles) {
     return in_array($user['role'], (array)$roles);
 }
 
-
 // --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
 
 function handle_post_requests() {
     if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
-
     $conn = get_db_connection();
     $action = $_POST['action'] ?? '';
     $user = get_current_user();
-
-    // Use um bloco try-catch para lidar com possíveis erros de SQL
     try {
         switch ($action) {
             case 'login':
-                if (login($_POST['email'], $_POST['password'])) {
-                    header('Location: index.php?page=dashboard');
-                    exit;
-                }
-                $_SESSION['error'] = 'Credenciais inválidas.';
-                header('Location: index.php?page=login');
-                exit;
-
+                if (login($_POST['email'], $_POST['password'])) { header('Location: index.php?page=dashboard'); exit; }
+                $_SESSION['error'] = 'Credenciais inválidas.'; header('Location: index.php?page=login'); exit;
             case 'add_client':
-                if (has_permission('admin')) {
-                    $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)");
-                    $stmt->bind_param("s", $_POST['name']);
-                    $stmt->execute();
-                }
+                if (has_permission('admin')) { $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)"); $stmt->bind_param("s", $_POST['name']); $stmt->execute(); }
                 break;
-
             case 'add_project':
-                if (has_permission('admin')) {
-                    $p = $_POST['project'];
-                    $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)");
-                    $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']);
-                    $stmt->execute();
-                }
+                if (has_permission('admin')) { $p = $_POST['project']; $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']); $stmt->execute(); }
                 break;
-
             case 'add_user':
-                if (has_permission('admin')) {
-                    $u = $_POST['user'];
-                    $password_hash = password_hash($u['password'], PASSWORD_DEFAULT);
-                    $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)");
-                    $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']);
-                    $stmt->execute();
-                }
+                if (has_permission('admin')) { $u = $_POST['user']; $password_hash = password_hash($u['password'], PASSWORD_DEFAULT); $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"); $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']); $stmt->execute(); }
                 break;
-
             case 'add_test':
-                if (has_permission('admin')) {
-                    $t = $_POST['test'];
-                    $test_id = 'TEST-' . time(); // ID único
-                    $custom_fields_json = $_POST['customFields'] ?? '[]';
-                    $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)");
-                    $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json);
-                    $stmt->execute();
-                }
+                if (has_permission('admin')) { $t = $_POST['test']; $test_id = 'TEST-' . time(); $custom_fields_json = $_POST['customFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json); $stmt->execute(); }
                 break;
-            
             case 'execute_test':
                 if (has_permission('tester')) {
-                    $testCaseId = $_POST['test_case_id'];
-                    $resultsJson = json_encode($_POST['results']);
-                    $reportId = 'REP-' . time();
-                    $executionDate = date('Y-m-d H:i:s');
-                    
-                    // Inicia transação
+                    $testCaseId = $_POST['test_case_id']; $resultsJson = json_encode($_POST['results']); $reportId = 'REP-' . time(); $executionDate = date('Y-m-d H:i:s');
                     $conn->begin_transaction();
-                    $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?");
-                    $stmt_update->bind_param("s", $testCaseId);
-                    $stmt_update->execute();
-                    
-                    $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)");
-                    $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson);
-                    $stmt_insert->execute();
-                    
+                    $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?"); $stmt_update->bind_param("s", $testCaseId); $stmt_update->execute();
+                    $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)"); $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson); $stmt_insert->execute();
                     $conn->commit();
                 }
                 break;
-
             case 'pause_test':
-                if (has_permission('tester')) {
-                    $pausedStateJson = json_encode($_POST['results']);
-                    $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?");
-                    $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']);
-                    $stmt->execute();
-                }
+                if (has_permission('tester')) { $pausedStateJson = json_encode($_POST['results']); $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?"); $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']); $stmt->execute(); }
                 break;
-
             case 'resume_test':
-                 if (has_permission('tester')) {
-                    $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?");
-                    $stmt->bind_param("s", $_POST['test_case_id']);
-                    $stmt->execute();
-                }
+                 if (has_permission('tester')) { $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?"); $stmt->bind_param("s", $_POST['test_case_id']); $stmt->execute(); }
                 break;
-
             case 'add_custom_template':
-                if (has_permission('admin')) {
-                    $t = $_POST['template'];
-                    $template_id = 'CUSTOM-' . time();
-                    $form_fields_json = $_POST['formFields'] ?? '[]';
-                    $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)");
-                    $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json);
-                    $stmt->execute();
-                }
+                if (has_permission('admin')) { $t = $_POST['template']; $template_id = 'CUSTOM-' . time(); $form_fields_json = $_POST['formFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)"); $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json); $stmt->execute(); }
                 break;
         }
     } catch (mysqli_sql_exception $e) {
-        // Se ocorrer um erro de SQL, loga o erro e exibe uma mensagem amigável.
         error_log("SQL Error: " . $e->getMessage());
-        // Em uma transação, faz rollback.
-        if ($conn->in_transaction) {
-            $conn->rollback();
-        }
-        // Poderia definir uma mensagem de erro na sessão para exibir ao usuário.
-        $_SESSION['error_message'] = "Ocorreu um erro ao processar sua solicitação. Tente novamente.";
+        if ($conn->in_transaction) { $conn->rollback(); }
+        $_SESSION['error_message'] = "Ocorreu um erro ao processar sua solicitação.";
     }
-
     header('Location: ' . $_SERVER['REQUEST_URI']);
     exit;
 }
-
-// Garante que o DB seja populado com os templates iniciais
-seed_initial_templates();
-handle_post_requests();
-
-// --- O restante do código de renderização (ícones, layout, páginas) permanece o mesmo ---
-// ... (O código das funções de renderização a partir daqui é idêntico ao da versão anterior)
-// Para economizar espaço, o código visual idêntico não foi repetido.
 
 // --- FUNÇÕES DE ÍCONES (SVG) ---
 function HomeIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>'; }
@@ -281,26 +168,7 @@ function PlusIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.or
 function HelpCircleIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>'; }
 function BeakerIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3h15"/><path d="M6 3v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V3"/><path d="M6 14h12"/></svg>'; }
 
-// --- ROTEAMENTO E RENDERIZAÇÃO FINAL ---
-$page = $_GET['page'] ?? 'dashboard';
-if ($page === 'logout') logout();
-if (!is_logged_in() && $page !== 'login') {
-    header('Location: index.php?page=login');
-    exit;
-}
-
-$all_data = get_data();
-
-$pages = [
-    'dashboard' => ['renderer' => 'render_dashboard_page', 'roles' => ['admin', 'tester', 'client']],
-    'client-management' => ['renderer' => 'render_client_management_page', 'roles' => ['admin']],
-    'project-management' => ['renderer' => 'render_project_management_page', 'roles' => ['admin']],
-    'user-management' => ['renderer' => 'render_user_management_page', 'roles' => ['admin']],
-    'test-management' => ['renderer' => 'render_test_management_page', 'roles' => ['admin', 'tester']],
-    'reports' => ['renderer' => 'render_reports_page', 'roles' => ['admin', 'tester', 'client']],
-    'test-guidelines' => ['renderer' => 'render_test_guidelines_page', 'roles' => ['admin', 'tester', 'client']],
-    'custom-templates' => ['renderer' => 'render_custom_templates_page', 'roles' => ['admin']],
-];
+// --- FUNÇÕES DE RENDERIZAÇÃO ---
 
 function render_header($title) {
 ?><!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" /><title><?= htmlspecialchars($title) ?> - TestBot Manager</title><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"><style>body { font-family: 'Inter', sans-serif; overscroll-behavior-y: contain; } .content-scrollable::-webkit-scrollbar { display: none; } .content-scrollable { -ms-overflow-style: none; scrollbar-width: none; } details > summary { list-style: none; } details > summary::-webkit-details-marker { display: none; }</style></head><body class="bg-gray-100 text-gray-900 min-h-screen antialiased"><?php
@@ -312,13 +180,8 @@ function render_footer() {
 
 function render_app_layout($page, callable $content_renderer, $all_data) {
     $user = get_current_user();
-    $pageTitles = [
-      'dashboard' => "Dashboard", 'test-management' => "Gerenciar Testes", 'user-management' => "Gerenciar Usuários",
-      'reports' => "Relatórios", 'client-management' => "Gerenciar Clientes", 'project-management' => "Gerenciar Projetos",
-      'test-guidelines' => "Orientações de Teste", 'custom-templates' => "Modelos de Teste"
-    ];
+    $pageTitles = ['dashboard' => "Dashboard", 'test-management' => "Gerenciar Testes", 'user-management' => "Gerenciar Usuários", 'reports' => "Relatórios", 'client-management' => "Gerenciar Clientes", 'project-management' => "Gerenciar Projetos", 'test-guidelines' => "Orientações de Teste", 'custom-templates' => "Modelos de Teste"];
     $title = $pageTitles[$page] ?? 'Detalhes';
-    
     render_header($title);
     $navItems = [
         'admin' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Clientes", 'path' => "client-management", 'icon' => BuildingIcon()],['name' => "Projetos", 'path' => "project-management", 'icon' => FolderIcon()],['name' => "Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Usuários", 'path' => "user-management", 'icon' => UsersIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Modelos", 'path' => "custom-templates", 'icon' => BeakerIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
@@ -578,12 +441,52 @@ function render_custom_templates_page($data) {
     );
 }
 
+// =================================================================
+// Bloco de Execução Principal
+// O código abaixo é executado em cada requisição.
+// =================================================================
+
+// Garante que o DB seja populado com os templates iniciais
+seed_initial_templates();
+// Processa quaisquer ações de formulário enviadas via POST
+handle_post_requests();
+
+// Define a página a ser renderizada
+$page = $_GET['page'] ?? 'dashboard';
+
+// Roteamento de Ações Especiais
+if ($page === 'logout') {
+    logout();
+}
+
+// Proteção de Rota: força o login se não estiver logado
+if (!is_logged_in() && $page !== 'login') {
+    header('Location: index.php?page=login');
+    exit;
+}
+
+// Busca todos os dados do banco para a renderização da página
+$all_data = get_data();
+
+// Mapa de páginas, renderizadores e permissões
+$pages = [
+    'dashboard' => ['renderer' => 'render_dashboard_page', 'roles' => ['admin', 'tester', 'client']],
+    'client-management' => ['renderer' => 'render_client_management_page', 'roles' => ['admin']],
+    'project-management' => ['renderer' => 'render_project_management_page', 'roles' => ['admin']],
+    'user-management' => ['renderer' => 'render_user_management_page', 'roles' => ['admin']],
+    'test-management' => ['renderer' => 'render_test_management_page', 'roles' => ['admin', 'tester']],
+    'reports' => ['renderer' => 'render_reports_page', 'roles' => ['admin', 'tester', 'client']],
+    'test-guidelines' => ['renderer' => 'render_test_guidelines_page', 'roles' => ['admin', 'tester', 'client']],
+    'custom-templates' => ['renderer' => 'render_custom_templates_page', 'roles' => ['admin']],
+];
+
+// Lógica Final de Renderização
 if ($page === 'login') {
     render_login_page($all_data);
 } elseif (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
     render_app_layout($page, $pages[$page]['renderer'], $all_data);
 } else {
-    // Página não encontrada ou sem permissão -> redireciona para o dashboard
+    // Se a página não existe ou o usuário não tem permissão, redireciona para o dashboard
     render_app_layout('dashboard', 'render_dashboard_page', $all_data);
 }
 ?>
