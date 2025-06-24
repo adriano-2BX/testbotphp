@@ -28,44 +28,23 @@ const PRESET_TESTS = [
 
 // --- FUNÇÕES DE BANCO DE DADOS ---
 if (!function_exists('get_db_connection')) {
-    /**
-     * Estabelece e retorna uma conexão com o banco de dados.
-     * A função foi melhorada para fornecer feedback de erro detalhado, ajudando a diagnosticar
-     * problemas de configuração (ex: host errado, senha incorreta).
-     */
     function get_db_connection() {
         static $conn;
         if ($conn === null) {
-            // Desativa a notificação de erros do MySQLi para lidar com eles manualmente.
             mysqli_report(MYSQLI_REPORT_OFF);
-
-            // Tenta criar uma nova conexão usando as constantes definidas.
             $conn = mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT);
-
-            // Verifica se ocorreu um erro na conexão.
             if (!$conn) {
-                // Obtém informações detalhadas sobre o erro.
                 $error_code = mysqli_connect_errno();
                 $error_message = mysqli_connect_error();
                 $connection_details = "Tentativa de conexão a " . DB_HOST . ":" . DB_PORT . " com o utilizador " . DB_USER . ".";
-
-                // Regista o erro detalhado no log de erros do servidor para depuração.
                 error_log("DB Connection Error (Code: $error_code): $error_message. $connection_details");
-
-                // Monta uma mensagem de erro informativa para o utilizador.
                 $user_error_message = "Não foi possível conectar ao servidor de banco de dados.<br><br><b>Detalhes do Erro:</b> " . htmlspecialchars($error_message) . "<br><b>Detalhes da Tentativa:</b> " . htmlspecialchars($connection_details) . "<br><br>Por favor, verifique se as constantes DB_HOST, DB_USER, DB_PASS, DB_NAME e DB_PORT no topo do ficheiro estão corretas e se o serviço do banco de dados está acessível a partir da aplicação.";
-
-                // Mostra uma página de erro amigável e informativa para o utilizador.
                 render_error_page(
                     "Erro de Conexão com o Banco de Dados (Código: $error_code)",
                     $user_error_message
                 );
-                
-                // Interrompe a execução do script.
                 exit;
             }
-            
-            // Define o conjunto de caracteres da conexão para utf8mb4 para suportar emojis e caracteres especiais.
             $conn->set_charset("utf8mb4");
         }
         return $conn;
@@ -77,7 +56,7 @@ if (!function_exists('seed_initial_templates')) {
     function seed_initial_templates() {
         $conn = get_db_connection();
         $result = $conn->query("SELECT COUNT(*) as count FROM test_templates WHERE is_custom = 0");
-        if ($result->fetch_assoc()['count'] == 0) {
+        if ($result && $result->fetch_assoc()['count'] == 0) {
             $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 0)");
             foreach (PRESET_TESTS as $template) {
                 $formFieldsJson = json_encode($template['formFields']);
@@ -110,20 +89,28 @@ if (!function_exists('get_data')) {
 // --- FUNÇÕES DE AUTENTICAÇÃO E UTILITÁRIOS ---
 if (!function_exists('login')) { function login($email, $password) { $conn = get_db_connection(); $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?"); $stmt->bind_param("s", $email); $stmt->execute(); $result = $stmt->get_result(); if ($user = $result->fetch_assoc()) { if (password_verify($password, $user['password_hash'])) { unset($user['password_hash']); $_SESSION['user'] = $user; return true; } } return false; } }
 if (!function_exists('logout')) { function logout() { session_destroy(); header('Location: index.php?page=login'); exit; } }
-if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']); } }
+if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']) && is_array($_SESSION['user']); } }
 
-// CORREÇÃO: Garante que a função sempre retorne um array ou null.
+// Garante que a função sempre retorne um array ou null.
 if (!function_exists('get_current_user')) { 
     function get_current_user() { 
-        // Verifica se a sessão 'user' existe E se é um array antes de retornar.
         if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
             return $_SESSION['user'];
         }
-        return null; // Retorna nulo em todos os outros casos.
+        return null;
     } 
 }
 
-if (!function_exists('has_permission')) { function has_permission($roles) { $user = get_current_user(); if (!$user) return false; return in_array($user['role'], (array)$roles); } }
+// Torna a verificação de permissão mais segura.
+if (!function_exists('has_permission')) { 
+    function has_permission($roles) { 
+        $user = get_current_user(); 
+        if (!is_array($user) || !isset($user['role'])) {
+            return false;
+        }
+        return in_array($user['role'], (array)$roles); 
+    } 
+}
 
 // --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
 if (!function_exists('handle_post_requests')) {
@@ -140,7 +127,7 @@ if (!function_exists('handle_post_requests')) {
                 case 'add_user': if (has_permission('admin')) { $u = $_POST['user']; $password_hash = password_hash($u['password'], PASSWORD_DEFAULT); $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"); $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Utilizador adicionado com sucesso!']; } break;
                 case 'add_test': if (has_permission('admin')) { $t = $_POST['test']; $test_id = 'TEST-' . time(); $custom_fields_json = $_POST['customFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Caso de teste criado com sucesso!']; } break;
                 case 'execute_test':
-                    if (has_permission('tester')) {
+                    if (has_permission('tester') && $user) {
                         $testCaseId = $_POST['test_case_id']; $resultsJson = json_encode($_POST['results']); $reportId = 'REP-' . time(); $executionDate = date('Y-m-d H:i:s');
                         $conn->begin_transaction();
                         $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?"); $stmt_update->bind_param("s", $testCaseId); $stmt_update->execute();
@@ -204,9 +191,17 @@ if (!function_exists('render_flash_message')) {
     }
 }
 
+// CORREÇÃO: Adicionada lógica de autocorreção de sessão.
 if (!function_exists('render_app_layout')) {
     function render_app_layout($page, callable $content_renderer, $all_data) {
         $user = get_current_user();
+
+        // MECANISMO DE AUTOCORREÇÃO: Se a sessão do utilizador estiver corrompida (não for um array),
+        // força o logout para limpar a sessão e redireciona para a página de login.
+        if (!is_array($user) || !isset($user['role']) || !isset($user['name'])) {
+            logout();
+        }
+        
         $pageTitles = ['dashboard' => "Dashboard", 'test-management' => "Gerir Testes", 'user-management' => "Gerir Utilizadores", 'reports' => "Relatórios", 'client-management' => "Gerir Clientes", 'project-management' => "Gerir Projetos", 'test-guidelines' => "Orientações de Teste", 'custom-templates' => "Modelos Personalizados"];
         $title = $pageTitles[$page] ?? 'Detalhes';
         render_header($title);
@@ -215,14 +210,14 @@ if (!function_exists('render_app_layout')) {
             'tester' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Meus Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
             'client' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
         ];
-        // Adicionado um fallback para o caso de o 'role' não existir.
-        $userNav = $navItems[$user['role'] ?? 'client'] ?? $navItems['client'];
+        
+        $userNav = $navItems[$user['role']];
         ?>
         <div class="h-screen w-screen flex flex-col sm:flex-row bg-gray-100">
             <div class="hidden sm:flex flex-col w-64 bg-white border-r border-gray-200 p-4">
                 <h1 class="text-2xl font-bold text-cyan-600 mb-10 px-2">TestBot</h1>
                 <nav class="flex-1 space-y-2"><?php foreach ($userNav as $item): $isActive = $page === $item['path']; ?><a href="index.php?page=<?= $item['path'] ?>" class="w-full flex items-center gap-3 text-left py-2.5 px-4 rounded-lg transition-colors text-base font-semibold <?= $isActive ? 'bg-cyan-500 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-100' ?>"><?= $item['icon']('class="w-5 h-5"') ?><?= htmlspecialchars($item['name']) ?></a><?php endforeach; ?></nav>
-                <div class="pt-6 border-t border-gray-200"><p class="text-sm font-semibold text-gray-800"><?= htmlspecialchars($user['name'] ?? 'Visitante') ?></p><p class="text-xs text-gray-500 capitalize"><?= htmlspecialchars($user['role'] ?? '') ?></p></div>
+                <div class="pt-6 border-t border-gray-200"><p class="text-sm font-semibold text-gray-800"><?= htmlspecialchars($user['name']) ?></p><p class="text-xs text-gray-500 capitalize"><?= htmlspecialchars($user['role']) ?></p></div>
             </div>
             <div class="flex-1 flex flex-col overflow-hidden">
                 <header class="bg-white/80 backdrop-blur-lg border-b border-gray-200 w-full z-10"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8"><div class="flex items-center justify-between h-16"><h1 class="text-lg font-bold text-gray-800"><?= htmlspecialchars($title) ?></h1><a href="index.php?page=logout" class="hidden sm:flex items-center gap-2 text-sm font-semibold text-gray-500 hover:text-red-500"><?= LogOutIcon('class="w-5 h-5"') ?>Sair</a></div></div></header>
@@ -314,7 +309,7 @@ if (!function_exists('render_user_management_page')) {
 if (!function_exists('render_test_management_page')) {
     function render_test_management_page($data) {
         $user = get_current_user();
-        $filteredTestCases = array_filter($data['test_cases'], fn($tc) => $user['role'] === 'admin' || $tc['assigned_to_id'] == $user['id']);
+        $filteredTestCases = array_filter($data['test_cases'], fn($tc) => has_permission('admin') || $tc['assigned_to_id'] == $user['id']);
         $statusStyles = ['pending' => "bg-yellow-100 text-yellow-800", 'completed' => "bg-green-100 text-green-800", 'paused' => "bg-orange-100 text-orange-800"];
         ?>
         <div class="space-y-6">
@@ -490,19 +485,13 @@ if (!function_exists('render_custom_templates_page')) {
 }
 
 if (!function_exists('render_error_page')) {
-    /**
-     * Renderiza uma página de erro.
-     * A função foi modificada para não usar htmlspecialchars na mensagem,
-     * permitindo a passagem de tags HTML básicas (como <br> e <b>) para formatar
-     * as mensagens de erro detalhadas da conexão.
-     */
     function render_error_page($title, $message) {
         render_header("Erro");
         ?>
         <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
             <div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-lg text-center">
                 <h1 class="text-3xl font-bold text-red-600 mb-2"><?= htmlspecialchars($title) ?></h1>
-                <p class="text-gray-600 text-left"><?= $message // htmlspecialchars removido para permitir HTML ?></p>
+                <p class="text-gray-600 text-left"><?= $message ?></p>
             </div>
         </div>
         <?php
@@ -554,3 +543,14 @@ if ($page === 'login') {
     render_app_layout('dashboard', 'render_dashboard_page', $all_data);
 }
 ?>
+```
+Most up-to-date Immersive Artifact for "sql_admin_insert" is:
+
+```sql
+-- Substitua os valores de exemplo pelos seus dados.
+-- O mais importante é substituir 'COLE_O_HASH_GERADO_AQUI' pelo resultado do passo 1.
+
+INSERT INTO `users` (`name`, `email`, `password_hash`, `role`) 
+VALUES 
+('Administrador', 'admin@exemplo.com', 'COLE_O_HASH_GERADO_AQUI', 'admin');
+
