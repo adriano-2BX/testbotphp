@@ -32,8 +32,8 @@ const PRESET_TESTS = [
 if (!function_exists('get_db_connection')) {
     /**
      * Estabelece e retorna uma conexão com o banco de dados.
-     * A função foi modificada para usar as constantes DB_HOST, DB_USER, etc., diretamente.
-     * Isso remove a necessidade de analisar uma URL, tornando o código mais limpo e menos propenso a erros.
+     * A função foi melhorada para fornecer feedback de erro detalhado, ajudando a diagnosticar
+     * problemas de configuração (ex: host errado, senha incorreta).
      */
     function get_db_connection() {
         static $conn;
@@ -42,18 +42,25 @@ if (!function_exists('get_db_connection')) {
             mysqli_report(MYSQLI_REPORT_OFF);
 
             // Tenta criar uma nova conexão usando as constantes definidas.
-            // O '@' suprime o aviso de erro padrão do PHP, pois estamos a tratar o erro abaixo.
-            $conn = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT);
+            $conn = mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT);
 
             // Verifica se ocorreu um erro na conexão.
-            if ($conn->connect_error) {
+            if (!$conn) {
+                // Obtém informações detalhadas sobre o erro.
+                $error_code = mysqli_connect_errno();
+                $error_message = mysqli_connect_error();
+                $connection_details = "Tentativa de conexão a " . DB_HOST . ":" . DB_PORT . " com o utilizador " . DB_USER . ".";
+
                 // Regista o erro detalhado no log de erros do servidor para depuração.
-                error_log("DB Connection Error: " . $conn->connect_error);
-                
-                // Mostra uma página de erro amigável para o utilizador.
+                error_log("DB Connection Error (Code: $error_code): $error_message. $connection_details");
+
+                // Monta uma mensagem de erro informativa para o utilizador.
+                $user_error_message = "Não foi possível conectar ao servidor de banco de dados.<br><br><b>Detalhes do Erro:</b> " . htmlspecialchars($error_message) . "<br><b>Detalhes da Tentativa:</b> " . htmlspecialchars($connection_details) . "<br><br>Por favor, verifique se as constantes DB_HOST, DB_USER, DB_PASS, DB_NAME e DB_PORT no topo do ficheiro estão corretas e se o serviço do banco de dados está acessível a partir da aplicação.";
+
+                // Mostra uma página de erro amigável e informativa para o utilizador.
                 render_error_page(
-                    "Erro de Conexão com o Banco de Dados",
-                    "Não foi possível conectar ao servidor de banco de dados. Verifique as credenciais e se o servidor está acessível."
+                    "Erro de Conexão com o Banco de Dados (Código: $error_code)",
+                    $user_error_message
                 );
                 
                 // Interrompe a execução do script.
@@ -66,6 +73,7 @@ if (!function_exists('get_db_connection')) {
         return $conn;
     }
 }
+
 
 if (!function_exists('seed_initial_templates')) {
     function seed_initial_templates() {
@@ -472,13 +480,19 @@ if (!function_exists('render_custom_templates_page')) {
 }
 
 if (!function_exists('render_error_page')) {
+    /**
+     * Renderiza uma página de erro.
+     * A função foi modificada para não usar htmlspecialchars na mensagem,
+     * permitindo a passagem de tags HTML básicas (como <br> e <b>) para formatar
+     * as mensagens de erro detalhadas da conexão.
+     */
     function render_error_page($title, $message) {
         render_header("Erro");
         ?>
         <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
             <div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-lg text-center">
                 <h1 class="text-3xl font-bold text-red-600 mb-2"><?= htmlspecialchars($title) ?></h1>
-                <p class="text-gray-600"><?= htmlspecialchars($message) ?></p>
+                <p class="text-gray-600 text-left"><?= $message // htmlspecialchars removido para permitir HTML ?></p>
             </div>
         </div>
         <?php
