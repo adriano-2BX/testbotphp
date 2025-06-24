@@ -4,50 +4,7 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// --- BLOCO DE DEPURAÇÃO DE LOGIN ---
-// Este bloco será executado APENAS na requisição imediatamente após uma tentativa de login.
-if (isset($_GET['from_login']) && $_GET['from_login'] === '1') {
-    // Define o tipo de conteúdo para HTML para uma exibição clara.
-    header('Content-Type: text/html; charset=utf-8');
-    // Inicia a renderização da página de depuração.
-    echo '<html><head><title>Depuração de Login</title><style>body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; padding: 20px; background-color: #f8f9fa; color: #212529; } .container { max-width: 800px; margin: auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); } h1, h2 { color: #343a40; } pre { background-color: #e9ecef; padding: 15px; border-radius: 5px; border: 1px solid #dee2e6; white-space: pre-wrap; word-wrap: break-word; } code { font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; color: #c7254e; background-color: #f9f2f4; border-radius: 3px; padding: 2px 4px; } .success { color: #28a745; font-weight: bold; } .error { color: #dc3545; font-weight: bold; }</style></head><body>';
-    echo '<div class="container">';
-    echo '<h1>Resultado da Tentativa de Login</h1>';
-    echo '<p>Esta página analisa o estado da sessão imediatamente após o redirecionamento do formulário de login. O resultado abaixo indica a causa do problema.</p><hr>';
-    
-    // Verifica o estado da sessão.
-    if (session_status() === PHP_SESSION_ACTIVE) {
-        echo '<p class="success">✔ O estado da sessão do PHP está ATIVO.</p>';
-    } else {
-        echo '<p class="error">❌ O estado da sessão do PHP NÃO está ativo. A sessão não foi iniciada corretamente.</p>';
-    }
 
-    // A verificação crucial: A variável de sessão do utilizador existe?
-    if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
-        echo '<p class="success">✔ SUCESSO: A variável de sessão <code>$_SESSION[\'user\']</code> FOI encontrada.</p>';
-        echo '<h2>Dados do Utilizador na Sessão:</h2>';
-        echo '<pre>' . htmlspecialchars(print_r($_SESSION['user'], true)) . '</pre>';
-        echo '<h3>Conclusão:</h3>';
-        echo '<p>O login funcionou e a sessão foi guardada corretamente. <b>O problema não está na gestão da sessão.</b> Se o loop de login persistir depois de remover este bloco de depuração, o problema pode estar em alguma regra de reescrita de URL (.htaccess) ou configuração do servidor que interfere com o parâmetro <code>page=dashboard</code>.</p>';
-    } else {
-        echo '<p class="error">❌ FALHA: A variável de sessão <code>$_SESSION[\'user\']</code> NÃO foi encontrada!</p>';
-        echo '<h2>Dados da Sessão (Variável $_SESSION completa):</h2>';
-        echo '<pre>' . htmlspecialchars(print_r($_SESSION, true)) . '</pre>';
-        echo '<h3>Conclusão:</h3>';
-        echo '<p>O login pode ter sido válido, mas <b>os dados da sessão não foram mantidos</b> entre a página de login e esta página. Esta é a causa definitiva do loop de login.</p>';
-        echo '<h3>Causa Mais Provável:</h3>';
-        echo '<p>O PHP não tem permissão para escrever ficheiros de sessão no diretório do servidor. Verifique o caminho abaixo:</p>';
-        echo '<code>' . htmlspecialchars(session_save_path()) . '</code>';
-        echo '<h4>Como Resolver (para ambientes Docker/Linux):</h4>';
-        echo '<p>Conecte-se ao seu servidor/contentor e execute um comando para dar permissões de escrita a esse diretório, por exemplo: <code>chmod 777 ' . htmlspecialchars(session_save_path()) . '</code> ou ajuste as permissões do proprietário (<code>chown</code>).</p>';
-    }
-    
-    echo '<hr><p><a href="index.php">Clique aqui</a> para tentar carregar a aplicação novamente (após resolver o problema indicado acima).</p>';
-    echo '</div></body></html>';
-    // Para a execução do script para que apenas a página de depuração seja mostrada.
-    exit; 
-}
-// --- FIM DO BLOCO DE DEPURAÇÃO ---
 
 
 // --- DIAGNÓSTICO DE SESSÃO ---
