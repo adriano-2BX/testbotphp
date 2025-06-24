@@ -6,14 +6,12 @@ if (session_status() === PHP_SESSION_NONE) {
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
 /*
- * ATENÇÃO: As credenciais do banco de dados foram separadas em constantes
- * individuais para facilitar a configuração e a depuração.
+ * ATENÇÃO: As credenciais do banco de dados foram atualizadas para usar o utilizador 'root'.
  * Verifique se estes valores correspondem exatamente à configuração do seu ambiente (EasyPanel/Docker).
- * O erro de conexão geralmente ocorre por um valor incorreto aqui.
  */
-define('DB_HOST', 'lab_mysql'); // Hostname do serviço do banco de dados (ex: 'lab_mysql' ou 'mysql')
-define('DB_USER', 'mysql');       // Utilizador do banco de dados
-define('DB_PASS', 'bc86348b3cfea8e64566'); // Senha do utilizador
+define('DB_HOST', 'lab_mysql'); // Hostname do serviço do banco de dados (geralmente o nome do contentor)
+define('DB_USER', 'root');       // Utilizador do banco de dados (alterado para 'root')
+define('DB_PASS', 'd21d846891a08dfaa82b'); // Senha do utilizador root
 define('DB_NAME', 'testbot');     // Nome do banco de dados
 define('DB_PORT', 3306);          // Porta do banco de dados
 
