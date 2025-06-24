@@ -35,12 +35,12 @@ if (!function_exists('get_db_connection')) {
                 $connection_details = "Tentativa de conexão a " . DB_HOST . ":" . DB_PORT . " com o utilizador " . DB_USER . ".";
                 error_log("DB Connection Error (Code: $error_code): $error_message. $connection_details");
                 if (function_exists('render_error_page')) {
-                    render_error_page(
+                     render_error_page(
                         "Erro de Conexão com o Banco de Dados (Código: $error_code)",
                         "Não foi possível conectar ao servidor de banco de dados.<br><br><b>Detalhes do Erro:</b> " . htmlspecialchars($error_message) . "<br><b>Detalhes da Tentativa:</b> " . htmlspecialchars($connection_details)
                     );
                 } else {
-                    die("Erro Crítico: Falha na conexão com o banco de dados.");
+                    die("Erro Crítico: Falha na conexão com o banco de dados. Verifique as constantes e a disponibilidade do serviço.");
                 }
                 exit;
             }
@@ -98,7 +98,7 @@ if (!function_exists('login')) {
             if (password_verify($password, $user['password_hash'])) {
                 unset($user['password_hash']);
                 session_regenerate_id(true);
-                $_SESSION['user'] = json_encode($user); // Armazena como JSON
+                $_SESSION['user'] = json_encode($user); // CORREÇÃO: Armazena como JSON para evitar corrupção de sessão.
                 return 'success';
             } else {
                 return 'wrong_password';
@@ -118,7 +118,7 @@ if (!function_exists('is_logged_in')) {
 if (!function_exists('get_current_user')) { 
     function get_current_user() { 
         if (is_logged_in()) {
-            return json_decode($_SESSION['user'], true); // Descodifica para obter o array
+            return json_decode($_SESSION['user'], true); // CORREÇÃO: Descodifica o JSON para obter o array do utilizador.
         }
         return null;
     } 
@@ -160,24 +160,26 @@ if (!function_exists('handle_post_requests')) {
                     if ($loginResult === 'success') {
                         $redirect_url = 'index.php?page=dashboard';
                     } else {
-                        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.'];
+                        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas. Por favor, tente novamente.'];
                         $redirect_url = 'index.php?page=login';
                     }
                     break;
-                // Coloque todos os outros cases aqui...
+                // Coloque todos os seus outros 'case' aqui. Exemplo:
                 case 'add_client':
                     if (has_permission('admin')) {
                         $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)");
                         $stmt->bind_param("s", $_POST['name']);
                         $stmt->execute();
                         $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Cliente adicionado com sucesso!'];
+                    } else {
+                        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Acesso negado.'];
                     }
                     break;
-                // Adicione os outros cases do seu código original aqui
+                // ... (Continue com os outros cases: add_project, add_user, etc.)
             }
         } catch (mysqli_sql_exception $e) {
             error_log("SQL Error: " . $e->getMessage());
-            $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro no servidor.'];
+            $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro no servidor ao processar a sua solicitação.'];
         }
 
         session_write_close();
@@ -267,18 +269,36 @@ if (!function_exists('render_login_page')) {
     }
 }
 
-// Cole todas as suas outras funções render_..._page aqui
-// Exemplo:
 if (!function_exists('render_dashboard_page')) {
     function render_dashboard_page($data) {
         $user = get_current_user();
+        if (!$user) { logout(); return; }
         $firstName = explode(' ', $user['name'])[0];
         ?>
         <div class="space-y-6"><h2 class="text-2xl font-bold text-gray-800">Olá, <?= htmlspecialchars($firstName) ?>!</h2></div>
         <?php
     }
 }
-//...e assim por diante para todas as outras páginas.
+
+if (!function_exists('render_error_page')) {
+    function render_error_page($title, $message) {
+        render_header("Erro");
+        ?>
+        <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
+            <div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-lg text-center">
+                <h1 class="text-3xl font-bold text-red-600 mb-2"><?= htmlspecialchars($title) ?></h1>
+                <div class="text-gray-600 text-left p-4 bg-gray-50 rounded-lg border border-gray-200"><?= $message ?></div>
+            </div>
+        </div>
+        <?php
+        render_footer();
+    }
+}
+
+// RESTANTE DAS FUNÇÕES DE RENDERIZAÇÃO (COPIADAS DO SEU CÓDIGO ORIGINAL)
+if (!function_exists('render_management_page')) { function render_management_page($title, $item_name, $items, callable $render_item, callable $render_form) { ?> <div class="space-y-6"> <details class="bg-white rounded-xl shadow-sm"><summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Adicionar Novo <?= htmlspecialchars($item_name) ?></span><?= PlusIcon('w-5 h-5') ?></summary><div class="p-4 sm:p-6 border-t"><?php $render_form(); ?></div></details> <div class="bg-white rounded-xl shadow-sm p-4 sm:p-6"><h3 class="font-bold text-lg mb-4"><?= htmlspecialchars($title) ?></h3><div class="space-y-3"> <?php if (empty($items)): ?><p class="text-gray-500">Nenhum item encontrado.</p> <?php else: foreach ($items as $item): $render_item($item); endforeach; endif; ?> </div></div> </div> <?php } }
+if (!function_exists('render_client_management_page')) { function render_client_management_page($data) { render_management_page('Clientes', 'Cliente', $data['clients'], function($c) { echo '<div class="bg-gray-50 p-3 rounded-lg font-semibold">' . htmlspecialchars($c['name']) . '</div>'; }, function() { ?> <form method="POST"><input type="hidden" name="action" value="add_client"><input type="text" name="name" placeholder="Nome do Cliente" required class="w-full p-3 bg-gray-50 border rounded-lg mb-4"><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Salvar Cliente</button></form> <?php }); } }
+// ... (Copie e cole aqui TODAS as outras funções render_* do seu código original)
 
 
 // =================================================================
@@ -303,8 +323,6 @@ if (is_logged_in() && $page === 'login') {
     exit;
 }
 
-$all_data = is_logged_in() ? get_data() : [];
-
 $pages = [
     'dashboard' => ['renderer' => 'render_dashboard_page', 'roles' => ['admin', 'tester', 'client']],
     'client-management' => ['renderer' => 'render_client_management_page', 'roles' => ['admin']],
@@ -316,29 +334,29 @@ $pages = [
     'custom-templates' => ['renderer' => 'render_custom_templates_page', 'roles' => ['admin']],
 ];
 
-// Oculta a necessidade de colar todas as outras funções de renderização aqui, pois elas já estão no seu código original
-// Adicionei um placeholder para garantir que o código seja funcional.
-if (!function_exists('render_client_management_page')) { function render_client_management_page($data) { echo "Página de Gestão de Clientes"; } }
-if (!function_exists('render_project_management_page')) { function render_project_management_page($data) { echo "Página de Gestão de Projetos"; } }
-if (!function_exists('render_user_management_page')) { function render_user_management_page($data) { echo "Página de Gestão de Utilizadores"; } }
-if (!function_exists('render_test_management_page')) { function render_test_management_page($data) { echo "Página de Gestão de Testes"; } }
-if (!function_exists('render_reports_page')) { function render_reports_page($data) { echo "Página de Relatórios"; } }
-if (!function_exists('render_test_guidelines_page')) { function render_test_guidelines_page($data) { echo "Página de Orientações de Teste"; } }
-if (!function_exists('render_custom_templates_page')) { function render_custom_templates_page($data) { echo "Página de Modelos Personalizados"; } }
-if (!function_exists('render_error_page')) { function render_error_page($title, $message) { render_header('Erro'); echo "<h1>$title</h1><p>$message</p>"; render_footer(); } }
-
-
 if ($page === 'login') {
     render_login_page();
 } elseif (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
     seed_initial_templates();
     $all_data = get_data();
-    render_app_layout($page, $pages[$page]['renderer'], $all_data);
-} else {
-    if(is_logged_in()) {
-        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Página não encontrada ou sem permissão.'];
-        header('Location: index.php?page=dashboard');
+    $renderer = $pages[$page]['renderer'];
+    if (function_exists($renderer)) {
+        render_app_layout($page, $renderer, $all_data);
     } else {
+        render_error_page('Erro de Configuração', "A função de renderização '$renderer' não foi encontrada.");
+    }
+} else {
+    // CORREÇÃO: Lógica anti-loop.
+    if (is_logged_in()) {
+        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Página não encontrada ou acesso negado.'];
+        // Se a falha ocorrer no próprio dashboard, mostra um erro em vez de redirecionar.
+        if ($page !== 'dashboard') {
+            header('Location: index.php?page=dashboard');
+        } else {
+            render_error_page('Erro Crítico de Permissão', 'Não foi possível carregar o painel principal. Verifique as permissões do utilizador.');
+        }
+    } else {
+        // Se não estiver logado, o guarda no início já deveria ter redirecionado. Isto é uma segurança extra.
         header('Location: index.php?page=login');
     }
     exit;
