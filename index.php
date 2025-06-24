@@ -91,7 +91,6 @@ if (!function_exists('login')) { function login($email, $password) { $conn = get
 if (!function_exists('logout')) { function logout() { session_destroy(); header('Location: index.php?page=login'); exit; } }
 if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']) && is_array($_SESSION['user']); } }
 
-// Garante que a função sempre retorne um array ou null.
 if (!function_exists('get_current_user')) { 
     function get_current_user() { 
         if (isset($_SESSION['user']) && is_array($_SESSION['user'])) {
@@ -101,7 +100,6 @@ if (!function_exists('get_current_user')) {
     } 
 }
 
-// Torna a verificação de permissão mais segura.
 if (!function_exists('has_permission')) { 
     function has_permission($roles) { 
         $user = get_current_user(); 
@@ -113,42 +111,141 @@ if (!function_exists('has_permission')) {
 }
 
 // --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
+// CORREÇÃO: A função foi reestruturada para ter um único ponto de redirecionamento,
+// tornando o fluxo mais claro e evitando a perda de mensagens de sessão.
 if (!function_exists('handle_post_requests')) {
     function handle_post_requests() {
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+            return;
+        }
+
         $conn = get_db_connection();
         $action = $_POST['action'] ?? '';
         $user = get_current_user();
+        
+        // Redirecionamento padrão é a própria página.
+        $redirect_url = $_SERVER['REQUEST_URI'];
+
         try {
             switch ($action) {
-                case 'login': if (login($_POST['email'], $_POST['password'])) { $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Login bem-sucedido!']; header('Location: index.php?page=dashboard'); exit; } $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.']; header('Location: index.php?page=login'); exit;
-                case 'add_client': if (has_permission('admin')) { $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)"); $stmt->bind_param("s", $_POST['name']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Cliente adicionado com sucesso!']; } break;
-                case 'add_project': if (has_permission('admin')) { $p = $_POST['project']; $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Projeto adicionado com sucesso!']; } break;
-                case 'add_user': if (has_permission('admin')) { $u = $_POST['user']; $password_hash = password_hash($u['password'], PASSWORD_DEFAULT); $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"); $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Utilizador adicionado com sucesso!']; } break;
-                case 'add_test': if (has_permission('admin')) { $t = $_POST['test']; $test_id = 'TEST-' . time(); $custom_fields_json = $_POST['customFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Caso de teste criado com sucesso!']; } break;
+                case 'login':
+                    if (login($_POST['email'], $_POST['password'])) {
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Login bem-sucedido!'];
+                        $redirect_url = 'index.php?page=dashboard'; // Redireciona para o dashboard em caso de sucesso.
+                    } else {
+                        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.'];
+                        $redirect_url = 'index.php?page=login'; // Garante o redirecionamento para a página de login em caso de falha.
+                    }
+                    break;
+
+                case 'add_client':
+                    if (has_permission('admin')) {
+                        $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)");
+                        $stmt->bind_param("s", $_POST['name']);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Cliente adicionado com sucesso!'];
+                    }
+                    break;
+
+                case 'add_project':
+                    if (has_permission('admin')) {
+                        $p = $_POST['project'];
+                        $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)");
+                        $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Projeto adicionado com sucesso!'];
+                    }
+                    break;
+
+                case 'add_user':
+                    if (has_permission('admin')) {
+                        $u = $_POST['user'];
+                        $password_hash = password_hash($u['password'], PASSWORD_DEFAULT);
+                        $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)");
+                        $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Utilizador adicionado com sucesso!'];
+                    }
+                    break;
+
+                case 'add_test':
+                    if (has_permission('admin')) {
+                        $t = $_POST['test'];
+                        $test_id = 'TEST-' . time();
+                        $custom_fields_json = $_POST['customFields'] ?? '[]';
+                        $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)");
+                        $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Caso de teste criado com sucesso!'];
+                    }
+                    break;
+
                 case 'execute_test':
                     if (has_permission('tester') && $user) {
-                        $testCaseId = $_POST['test_case_id']; $resultsJson = json_encode($_POST['results']); $reportId = 'REP-' . time(); $executionDate = date('Y-m-d H:i:s');
+                        $testCaseId = $_POST['test_case_id'];
+                        $resultsJson = json_encode($_POST['results']);
+                        $reportId = 'REP-' . time();
+                        $executionDate = date('Y-m-d H:i:s');
                         $conn->begin_transaction();
-                        $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?"); $stmt_update->bind_param("s", $testCaseId); $stmt_update->execute();
-                        $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)"); $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson); $stmt_insert->execute();
+                        $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?");
+                        $stmt_update->bind_param("s", $testCaseId);
+                        $stmt_update->execute();
+                        $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)");
+                        $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson);
+                        $stmt_insert->execute();
                         $conn->commit();
                         $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste concluído e relatório gerado!'];
                     }
                     break;
-                case 'pause_test': if (has_permission('tester')) { $pausedStateJson = json_encode($_POST['results']); $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?"); $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste pausado com sucesso.']; } break;
-                case 'resume_test': if (has_permission('tester')) { $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?"); $stmt->bind_param("s", $_POST['test_case_id']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'info', 'message' => 'Teste retomado.']; } break;
-                case 'add_custom_template': if (has_permission('admin')) { $t = $_POST['template']; $template_id = 'CUSTOM-' . time(); $form_fields_json = $_POST['formFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)"); $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Modelo personalizado criado com sucesso!']; } break;
+
+                case 'pause_test':
+                    if (has_permission('tester')) {
+                        $pausedStateJson = json_encode($_POST['results']);
+                        $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?");
+                        $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste pausado com sucesso.'];
+                    }
+                    break;
+
+                case 'resume_test':
+                    if (has_permission('tester')) {
+                        $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?");
+                        $stmt->bind_param("s", $_POST['test_case_id']);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'info', 'message' => 'Teste retomado.'];
+                    }
+                    break;
+                    
+                case 'add_custom_template':
+                    if (has_permission('admin')) {
+                        $t = $_POST['template'];
+                        $template_id = 'CUSTOM-' . time();
+                        $form_fields_json = $_POST['formFields'] ?? '[]';
+                        $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)");
+                        $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json);
+                        $stmt->execute();
+                        $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Modelo personalizado criado com sucesso!'];
+                    }
+                    break;
             }
         } catch (mysqli_sql_exception $e) {
             error_log("SQL Error: " . $e->getMessage());
-            if ($conn->in_transaction) { $conn->rollback(); }
+            if ($conn->in_transaction) {
+                $conn->rollback();
+            }
             $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
-        header('Location: ' . $_SERVER['REQUEST_URI']);
+
+        // Garante que os dados da sessão são guardados antes de redirecionar.
+        session_write_close();
+        
+        // Ponto único de redirecionamento.
+        header('Location: ' . $redirect_url);
         exit;
     }
 }
+
 
 // --- FUNÇÕES DE ÍCONES (SVG) ---
 if (!function_exists('HomeIcon')) { function HomeIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>'; } }
@@ -191,13 +288,10 @@ if (!function_exists('render_flash_message')) {
     }
 }
 
-// CORREÇÃO: Adicionada lógica de autocorreção de sessão.
 if (!function_exists('render_app_layout')) {
     function render_app_layout($page, callable $content_renderer, $all_data) {
         $user = get_current_user();
 
-        // MECANISMO DE AUTOCORREÇÃO: Se a sessão do utilizador estiver corrompida (não for um array),
-        // força o logout para limpar a sessão e redireciona para a página de login.
         if (!is_array($user) || !isset($user['role']) || !isset($user['name'])) {
             logout();
         }
@@ -229,10 +323,11 @@ if (!function_exists('render_app_layout')) {
     }
 }
 
+// CORREÇÃO: Adicionados atributos 'autocomplete' para melhorar a experiência do utilizador e remover avisos do browser.
 if (!function_exists('render_login_page')) {
     function render_login_page($data) {
         render_header('Login');
-        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
+        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
         render_footer();
     }
 }
@@ -543,14 +638,3 @@ if ($page === 'login') {
     render_app_layout('dashboard', 'render_dashboard_page', $all_data);
 }
 ?>
-```
-Most up-to-date Immersive Artifact for "sql_admin_insert" is:
-
-```sql
--- Substitua os valores de exemplo pelos seus dados.
--- O mais importante é substituir 'COLE_O_HASH_GERADO_AQUI' pelo resultado do passo 1.
-
-INSERT INTO `users` (`name`, `email`, `password_hash`, `role`) 
-VALUES 
-('Administrador', 'admin@exemplo.com', 'COLE_O_HASH_GERADO_AQUI', 'admin');
-
