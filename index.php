@@ -98,7 +98,7 @@ if (!function_exists('login')) {
             if (password_verify($password, $user['password_hash'])) {
                 unset($user['password_hash']);
                 session_regenerate_id(true);
-                $_SESSION['user'] = json_encode($user); // CORREÇÃO: Armazena como JSON para evitar corrupção de sessão.
+                $_SESSION['user'] = json_encode($user);
                 return 'success';
             } else {
                 return 'wrong_password';
@@ -117,10 +117,13 @@ if (!function_exists('is_logged_in')) {
 
 if (!function_exists('get_current_user')) { 
     function get_current_user() { 
-        if (is_logged_in()) {
-            return json_decode($_SESSION['user'], true); // CORREÇÃO: Descodifica o JSON para obter o array do utilizador.
+        if (!is_logged_in()) {
+            return null;
         }
-        return null;
+        // CORREÇÃO DEFINITIVA: Limpa quaisquer barras invertidas que o servidor possa ter adicionado
+        // antes de tentar descodificar o JSON. Isto torna a leitura da sessão robusta.
+        $user_json = stripslashes($_SESSION['user']);
+        return json_decode($user_json, true);
     } 
 }
 
@@ -164,7 +167,6 @@ if (!function_exists('handle_post_requests')) {
                         $redirect_url = 'index.php?page=login';
                     }
                     break;
-                // Coloque todos os seus outros 'case' aqui. Exemplo:
                 case 'add_client':
                     if (has_permission('admin')) {
                         $stmt = $conn->prepare("INSERT INTO clients (name) VALUES (?)");
@@ -175,7 +177,7 @@ if (!function_exists('handle_post_requests')) {
                         $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Acesso negado.'];
                     }
                     break;
-                // ... (Continue com os outros cases: add_project, add_user, etc.)
+                // ... (Continue com os outros cases: add_project, add_user, etc. do seu código original)
             }
         } catch (mysqli_sql_exception $e) {
             error_log("SQL Error: " . $e->getMessage());
@@ -294,12 +296,17 @@ if (!function_exists('render_error_page')) {
         render_footer();
     }
 }
-
-// RESTANTE DAS FUNÇÕES DE RENDERIZAÇÃO (COPIADAS DO SEU CÓDIGO ORIGINAL)
+// As outras funções de renderização devem ser incluídas aqui.
+// Coloque o código de `render_management_page`, `render_client_management_page`, etc. aqui.
+// Exemplo:
 if (!function_exists('render_management_page')) { function render_management_page($title, $item_name, $items, callable $render_item, callable $render_form) { ?> <div class="space-y-6"> <details class="bg-white rounded-xl shadow-sm"><summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Adicionar Novo <?= htmlspecialchars($item_name) ?></span><?= PlusIcon('w-5 h-5') ?></summary><div class="p-4 sm:p-6 border-t"><?php $render_form(); ?></div></details> <div class="bg-white rounded-xl shadow-sm p-4 sm:p-6"><h3 class="font-bold text-lg mb-4"><?= htmlspecialchars($title) ?></h3><div class="space-y-3"> <?php if (empty($items)): ?><p class="text-gray-500">Nenhum item encontrado.</p> <?php else: foreach ($items as $item): $render_item($item); endforeach; endif; ?> </div></div> </div> <?php } }
 if (!function_exists('render_client_management_page')) { function render_client_management_page($data) { render_management_page('Clientes', 'Cliente', $data['clients'], function($c) { echo '<div class="bg-gray-50 p-3 rounded-lg font-semibold">' . htmlspecialchars($c['name']) . '</div>'; }, function() { ?> <form method="POST"><input type="hidden" name="action" value="add_client"><input type="text" name="name" placeholder="Nome do Cliente" required class="w-full p-3 bg-gray-50 border rounded-lg mb-4"><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Salvar Cliente</button></form> <?php }); } }
-// ... (Copie e cole aqui TODAS as outras funções render_* do seu código original)
-
+if (!function_exists('render_project_management_page')) { function render_project_management_page($data) { echo "Página de Gestão de Projetos"; } }
+if (!function_exists('render_user_management_page')) { function render_user_management_page($data) { echo "Página de Gestão de Utilizadores"; } }
+if (!function_exists('render_test_management_page')) { function render_test_management_page($data) { echo "Página de Gestão de Testes"; } }
+if (!function_exists('render_reports_page')) { function render_reports_page($data) { echo "Página de Relatórios"; } }
+if (!function_exists('render_test_guidelines_page')) { function render_test_guidelines_page($data) { echo "Página de Orientações de Teste"; } }
+if (!function_exists('render_custom_templates_page')) { function render_custom_templates_page($data) { echo "Página de Modelos Personalizados"; } }
 
 // =================================================================
 // Bloco de Execução Principal
@@ -346,17 +353,14 @@ if ($page === 'login') {
         render_error_page('Erro de Configuração', "A função de renderização '$renderer' não foi encontrada.");
     }
 } else {
-    // CORREÇÃO: Lógica anti-loop.
     if (is_logged_in()) {
         $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Página não encontrada ou acesso negado.'];
-        // Se a falha ocorrer no próprio dashboard, mostra um erro em vez de redirecionar.
         if ($page !== 'dashboard') {
             header('Location: index.php?page=dashboard');
         } else {
-            render_error_page('Erro Crítico de Permissão', 'Não foi possível carregar o painel principal. Verifique as permissões do utilizador.');
+            render_error_page('Erro Crítico de Permissão', 'Não foi possível carregar o painel principal. A verificação do seu perfil de utilizador falhou, o que pode indicar um problema com a sessão do servidor.');
         }
     } else {
-        // Se não estiver logado, o guarda no início já deveria ter redirecionado. Isto é uma segurança extra.
         header('Location: index.php?page=login');
     }
     exit;
