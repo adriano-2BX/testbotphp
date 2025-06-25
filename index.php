@@ -4,58 +4,6 @@ if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// --- BLOCO DE DEPURAÇÃO DE SESSÃO ---
-// Este bloco será executado APENAS na primeira vez que carregar o dashboard após o login.
-if (isset($_GET['page']) && $_GET['page'] === 'dashboard' && isset($_GET['session_debug'])) {
-    header('Content-Type: text/plain; charset=utf-8'); // Mostra como texto simples para clareza
-    
-    echo "--- INÍCIO DA DEPURAÇÃO DE SESSÃO ---\n\n";
-    
-    echo "[PASSO 1: VERIFICAÇÃO BÁSICA]\n";
-    echo "A sessão está ativa? " . (session_status() === PHP_SESSION_ACTIVE ? "Sim" : "Não") . "\n";
-    echo "A variável \$_SESSION['user'] existe? " . (isset($_SESSION['user']) ? "Sim" : "Não") . "\n\n";
-
-    if (isset($_SESSION['user'])) {
-        echo "[PASSO 2: CONTEÚDO BRUTO DA SESSÃO]\n";
-        echo "Conteúdo de \$_SESSION['user'] (exatamente como está armazenado):\n";
-        print_r($_SESSION['user']);
-        echo "\n\n";
-        
-        echo "[PASSO 3: TENTATIVA DE LIMPEZA E DESCODIFICAÇÃO]\n";
-        $user_json = stripslashes($_SESSION['user']);
-        echo "Conteúdo após 'stripslashes' (tentativa de limpar barras invertidas):\n";
-        print_r($user_json);
-        echo "\n\n";
-
-        $user_data = json_decode($user_json, true);
-        echo "Resultado após 'json_decode' (tentativa de converter para array):\n";
-        print_r($user_data);
-        echo "\n\n";
-        
-        echo "[PASSO 4: ANÁLISE FINAL]\n";
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            echo "ERRO: Falha ao descodificar o JSON. Mensagem: " . json_last_error_msg() . "\n";
-            echo "Isto confirma que os dados da sessão estão a ser corrompidos pelo servidor.\n";
-        } elseif (is_array($user_data) && isset($user_data['role'])) {
-            echo "SUCESSO: Os dados foram lidos e o perfil de utilizador ('role') é: " . $user_data['role'] . "\n";
-            echo "A verificação de permissão has_permission(['admin', 'tester', 'client']) retornaria: " . (has_permission(['admin', 'tester', 'client']) ? 'VERDADEIRO' : 'FALSO') . "\n";
-            echo "Se o resultado for VERDADEIRO mas o loop continua, o problema é outro.\n";
-        } else {
-            echo "ERRO: Mesmo após a limpeza, os dados do utilizador não puderam ser lidos como um array válido com um perfil ('role').\n";
-        }
-    } else {
-        echo "ERRO CRÍTICO: A variável de sessão do utilizador desapareceu completamente após o redirecionamento.\n";
-    }
-
-    echo "\n--- FIM DA DEPURAÇÃO ---\n";
-    echo "\nPor favor, copie e cole todo este texto na nossa conversa.";
-
-    // Para a execução para que apenas a depuração seja mostrada.
-    exit;
-}
-// --- FIM DO BLOCO DE DEPURAÇÃO ---
-
-
 // --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
 define('DB_HOST', 'lab_mysql');
 define('DB_USER', 'root');
@@ -162,13 +110,12 @@ if (!function_exists('get_current_user')) {
         if (!is_logged_in()) {
             return null;
         }
+        
         $user_json = stripslashes($_SESSION['user']);
         $user_data = json_decode($user_json, true);
 
         if (json_last_error() !== JSON_ERROR_NONE) {
-            error_log('Falha ao decodificar JSON da sessão: ' . json_last_error_msg());
-            error_log('Dados da sessão corrompidos: ' . $_SESSION['user']);
-            return null;
+            return null; 
         }
         return $user_data;
     } 
@@ -207,14 +154,13 @@ if (!function_exists('handle_post_requests')) {
         switch ($action) {
             case 'login':
                 if (login($_POST['email'] ?? '', $_POST['password'] ?? '') === 'success') {
-                    // Adiciona o parâmetro de depuração para a primeira carga do dashboard
-                    $redirect_url = 'index.php?page=dashboard&session_debug=1';
+                    $redirect_url = 'index.php?page=dashboard';
                 } else {
                     $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.'];
                     $redirect_url = 'index.php?page=login';
                 }
                 break;
-            // Adicione outros cases aqui se necessário
+            // Adicione outros cases aqui
         }
 
         header('Location: ' . $redirect_url);
@@ -364,16 +310,24 @@ if ($page === 'logout') {
 }
 
 if (!is_logged_in()) {
-    // Se não está logado, a única página permitida é a de login
     render_login_page();
     exit;
 }
 
 // --- A PARTIR DAQUI, O UTILIZADOR ESTÁ LOGADO ---
 
-// Se a página não existe ou o utilizador não tem permissão, força o logout.
-// Isto previne ciclos de redirecionamento e trata sessões corrompidas.
-if (!isset($pages[$page]) || !has_permission($pages[$page]['roles'])) {
+if (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
+    // Caminho feliz: renderiza a página solicitada
+    seed_initial_templates();
+    $all_data = get_data();
+    $renderer = $pages[$page]['renderer'];
+    if (function_exists($renderer)) {
+        render_app_layout($page, $renderer, $all_data);
+    } else {
+        render_error_page('Erro de Configuração', "A função de renderização '$renderer' não foi encontrada.");
+    }
+} else {
+    // Caminho de falha: sessão inválida ou sem permissão. Desloga o utilizador.
     $user_was_logged_in = is_logged_in();
     session_unset();
     session_destroy();
@@ -383,16 +337,5 @@ if (!isset($pages[$page]) || !has_permission($pages[$page]['roles'])) {
     }
     header('Location: index.php');
     exit;
-}
-
-// Se o utilizador está logado e tem permissão, renderiza a página.
-seed_initial_templates();
-$all_data = get_data();
-$renderer = $pages[$page]['renderer'];
-
-if (function_exists($renderer)) {
-    render_app_layout($page, $renderer, $all_data);
-} else {
-    render_error_page('Erro de Configuração', "A função de renderização '$renderer' não foi encontrada.");
 }
 ?>
