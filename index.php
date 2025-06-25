@@ -4,7 +4,7 @@
 // =================================================================
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
-define('DB_URL', 'mysql://mysql:bc86348b3cfea8e64566@lab_mysql:3306/testbot');
+define('DB_URL', 'mysql://root:d21d846891a08dfaa82b@lab_mysql:3306/testbot');
 
 const PRESET_TESTS = [
     ['id' => 'GREETING', 'name' => "Saudação e Despedida", 'description' => "Verifica se o bot saúda, se apresenta e se despede corretamente.", 'formFields' => [['name' => 'didGreet', 'label' => 'Bot iniciou com uma saudação?', 'type' => 'tri-state'], ['name' => 'identifiedUser', 'label' => 'Identificou o nome do utilizador?', 'type' => 'tri-state'], ['name' => 'offeredHelp', 'label' => 'Ofereceu ajuda ou apresentou-se?', 'type' => 'tri-state'], ['name' => 'didFarewell', 'label' => 'Despediu-se cordialmente no final?', 'type' => 'tri-state'], ['name' => 'notes', 'label' => 'Observações Adicionais', 'type' => 'textarea']]],
