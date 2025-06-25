@@ -328,14 +328,14 @@ if (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
     }
 } else {
     // Caminho de falha: sessão inválida ou sem permissão. Desloga o utilizador.
-    $user_was_logged_in = is_logged_in();
+    $user_was_logged_in = is_logged_in(); // Verifica se ele estava logado antes de destruir a sessão
     session_unset();
     session_destroy();
     session_start();
     if ($user_was_logged_in) {
         $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'A sua sessão expirou ou não tem permissão. Por favor, faça login novamente.'];
     }
-    header('Location: index.php');
+    header('Location: index.php?page=login');
     exit;
 }
 ?>
