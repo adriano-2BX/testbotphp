@@ -1,8 +1,7 @@
 <?php
-// Inicia a sessão no topo de todas as páginas. Essencial para autenticação.
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
+// =================================================================
+// Bloco de Configuração e Definição de Classes
+// =================================================================
 
 // --- CONFIGURAÇÃO DO BANCO DE DADOS E CONSTANTES ---
 define('DB_HOST', 'lab_mysql');
@@ -18,22 +17,94 @@ const PRESET_TESTS = [
     ['id' => 'PROMPT_INJECTION', 'name' => "Segurança: Injeção de Prompt", 'description' => "Tenta manipular o bot com instruções maliciosas para ignorar as suas diretrizes originais.", 'formFields' => [['name' => 'injectionAttempt', 'label' => 'Tentativa de Injeção de Prompt', 'type' => 'textarea'], ['name' => 'wasResisted', 'label' => 'O bot resistiu à injeção?', 'type' => 'tri-state'], ['name' => 'botFinalResponse', 'label' => 'Resposta Final do Bot', 'type' => 'textarea']]],
 ];
 
-// =================================================================
-// Bloco de Definição de Funções
-// =================================================================
+/**
+ * Classe para gerir sessões na base de dados.
+ * Esta é a alternativa robusta que resolve problemas de permissão de ficheiros no servidor.
+ */
+class DatabaseSessionHandler implements SessionHandlerInterface {
+    private $db;
+    private $ready = false;
 
-// --- FUNÇÕES DE BANCO DE DADOS ---
+    public function __construct() {
+        // A conexão será estabelecida no método open
+    }
+
+    public function open($savePath, $sessionName): bool {
+        // Usa as constantes globais para a conexão
+        $db = mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT);
+        if ($db) {
+            $this->db = $db;
+            $this->ready = true;
+            return true;
+        }
+        // Se a conexão falhar, regista o erro para que possa ser depurado.
+        error_log('DatabaseSessionHandler: Não foi possível conectar ao banco de dados.');
+        return false;
+    }
+
+    public function close(): bool {
+        if ($this->ready && $this->db) {
+            return $this->db->close();
+        }
+        return true;
+    }
+
+    public function read($id): string {
+        if (!$this->ready) return '';
+        $stmt = $this->db->prepare("SELECT data FROM sessions WHERE id = ?");
+        $stmt->bind_param('s', $id);
+        if ($stmt->execute()) {
+            $result = $stmt->get_result();
+            if ($row = $result->fetch_assoc()) {
+                return $row['data'] ?? '';
+            }
+        }
+        return '';
+    }
+
+    public function write($id, $data): bool {
+        if (!$this->ready) return false;
+        $access = time();
+        $stmt = $this->db->prepare("REPLACE INTO sessions (id, access, data) VALUES (?, ?, ?)");
+        $stmt->bind_param('sis', $id, $access, $data);
+        return $stmt->execute();
+    }
+
+    public function destroy($id): bool {
+        if (!$this->ready) return false;
+        $stmt = $this->db->prepare("DELETE FROM sessions WHERE id = ?");
+        $stmt->bind_param('s', $id);
+        return $stmt->execute();
+    }
+
+    #[\ReturnTypeWillChange]
+    public function gc($maxlifetime): int|false {
+        if (!$this->ready) return false;
+        $old = time() - $maxlifetime;
+        $stmt = $this->db->prepare("DELETE FROM sessions WHERE access < ?");
+        $stmt->bind_param('i', $old);
+        $stmt->execute();
+        return $stmt->affected_rows;
+    }
+}
+
+// --- INICIALIZAÇÃO DA SESSÃO COM O GESTOR DE BASE DE DADOS ---
+$handler = new DatabaseSessionHandler();
+session_set_save_handler($handler, true);
+session_start();
+
+// --- FUNÇÕES DE BANCO DE DADOS E AUTENTICAÇÃO ---
 if (!function_exists('get_db_connection')) {
     function get_db_connection() {
         static $conn;
-        if ($conn === null) {
+        if ($conn === null || !$conn->ping()) { // Adicionado !$conn->ping() para reconectar se necessário
             mysqli_report(MYSQLI_REPORT_OFF);
             $conn = mysqli_connect(DB_HOST, DB_USER, DB_PASS, DB_NAME, DB_PORT);
-            if (!$conn) {
+            if (!$conn) { 
                 if (function_exists('render_error_page')) {
-                     render_error_page( "Erro de Conexão com o Banco de Dados", "Não foi possível conectar ao servidor de banco de dados.");
+                     render_error_page( "Erro de Conexão", "Não foi possível conectar ao banco de dados.");
                 } else {
-                    die("Erro Crítico: Falha na conexão com o banco de dados.");
+                    die("Falha crítica ao obter conexão com o banco de dados."); 
                 }
                 exit;
             }
@@ -43,18 +114,78 @@ if (!function_exists('get_db_connection')) {
     }
 }
 
-if (!function_exists('seed_initial_templates')) {
-    function seed_initial_templates() {
+if (!function_exists('login')) {
+    function login($email, $password) {
         $conn = get_db_connection();
-        $result = $conn->query("SELECT COUNT(*) as count FROM test_templates WHERE is_custom = 0");
-        if ($result && $result->fetch_assoc()['count'] == 0) {
-            $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 0)");
-            foreach (PRESET_TESTS as $template) {
-                $formFieldsJson = json_encode($template['formFields']);
-                $stmt->bind_param("ssss", $template['id'], $template['name'], $template['description'], $formFieldsJson);
-                $stmt->execute();
+        $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?");
+        $stmt->bind_param("s", $email);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        if ($user = $result->fetch_assoc()) {
+            if (password_verify($password, $user['password_hash'])) {
+                unset($user['password_hash']);
+                session_regenerate_id(true);
+                $_SESSION['user'] = $user; // Agora pode guardar o array diretamente
+                return 'success';
             }
         }
+        return 'failed';
+    }
+}
+
+if (!function_exists('is_logged_in')) {
+    function is_logged_in() {
+        return isset($_SESSION['user']) && is_array($_SESSION['user']);
+    }
+}
+
+if (!function_exists('get_current_user')) { 
+    function get_current_user() { 
+        return $_SESSION['user'] ?? null;
+    } 
+}
+
+if (!function_exists('has_permission')) { 
+    function has_permission($roles) { 
+        $user = get_current_user();
+        if (empty($user) || !isset($user['role'])) {
+            return false;
+        }
+        return in_array($user['role'], (array)$roles, true); 
+    } 
+}
+
+if (!function_exists('logout')) {
+    function logout() {
+        session_unset();
+        session_destroy();
+        header('Location: index.php?page=login');
+        exit;
+    }
+}
+
+// --- FUNÇÕES DE LÓGICA DE NEGÓCIO E DADOS ---
+if (!function_exists('handle_post_requests')) {
+    function handle_post_requests() {
+        if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
+        
+        $action = $_POST['action'] ?? '';
+        $redirect_url = $_SERVER['REQUEST_URI']; // Redireciona para a mesma página por padrão
+
+        switch ($action) {
+            case 'login':
+                if (login($_POST['email'] ?? '', $_POST['password'] ?? '') === 'success') {
+                    $redirect_url = 'index.php?page=dashboard';
+                } else {
+                    $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.'];
+                    $redirect_url = 'index.php?page=login';
+                }
+                break;
+            // Adicionar todos os outros cases aqui...
+        }
+        
+        header('Location: ' . $redirect_url);
+        exit;
     }
 }
 
@@ -77,98 +208,8 @@ if (!function_exists('get_data')) {
     }
 }
 
-// --- FUNÇÕES DE AUTENTICAÇÃO E UTILITÁRIOS ---
 
-if (!function_exists('login')) {
-    function login($email, $password) {
-        $conn = get_db_connection();
-        $stmt = $conn->prepare("SELECT id, name, email, role, password_hash FROM users WHERE email = ?");
-        $stmt->bind_param("s", $email);
-        $stmt->execute();
-        $result = $stmt->get_result();
-
-        if ($user = $result->fetch_assoc()) {
-            if (password_verify($password, $user['password_hash'])) {
-                unset($user['password_hash']);
-                session_regenerate_id(true);
-                $_SESSION['user'] = json_encode($user);
-                return 'success';
-            }
-        }
-        return 'failed';
-    }
-}
-
-if (!function_exists('is_logged_in')) {
-    function is_logged_in() {
-        return isset($_SESSION['user']) && !empty($_SESSION['user']);
-    }
-}
-
-if (!function_exists('get_current_user')) { 
-    function get_current_user() { 
-        if (!is_logged_in()) {
-            return null;
-        }
-        
-        $user_json = stripslashes($_SESSION['user']);
-        $user_data = json_decode($user_json, true);
-
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            return null; 
-        }
-        return $user_data;
-    } 
-}
-
-if (!function_exists('has_permission')) { 
-    function has_permission($roles) { 
-        $user = get_current_user();
-        if (empty($user) || !is_array($user) || !isset($user['role'])) {
-            return false;
-        }
-        return in_array($user['role'], (array)$roles, true); 
-    } 
-}
-
-if (!function_exists('logout')) {
-    function logout() {
-        session_start();
-        session_unset();
-        session_destroy();
-        header('Location: index.php?page=login');
-        exit;
-    }
-}
-
-// --- LÓGICA DE NEGÓCIO (Ações do formulário) ---
-if (!function_exists('handle_post_requests')) {
-    function handle_post_requests() {
-        if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-            return;
-        }
-
-        $action = $_POST['action'] ?? '';
-        $redirect_url = 'index.php'; 
-
-        switch ($action) {
-            case 'login':
-                if (login($_POST['email'] ?? '', $_POST['password'] ?? '') === 'success') {
-                    $redirect_url = 'index.php?page=dashboard';
-                } else {
-                    $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Credenciais inválidas.'];
-                    $redirect_url = 'index.php?page=login';
-                }
-                break;
-            // Adicione outros cases aqui
-        }
-
-        header('Location: ' . $redirect_url);
-        exit;
-    }
-}
-
-// --- FUNÇÕES DE ÍCONES (SVG) ---
+// --- FUNÇÕES DE ÍCONES E RENDERIZAÇÃO ---
 if (!function_exists('HomeIcon')) { function HomeIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>'; } }
 if (!function_exists('ClipboardListIcon')) { function ClipboardListIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>'; } }
 if (!function_exists('UsersIcon')) { function UsersIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'; } }
@@ -179,41 +220,27 @@ if (!function_exists('FolderIcon')) { function FolderIcon($props = '') { return 
 if (!function_exists('PlusIcon')) { function PlusIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>'; } }
 if (!function_exists('HelpCircleIcon')) { function HelpCircleIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>'; } }
 if (!function_exists('BeakerIcon')) { function BeakerIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 3h15"/><path d="M6 3v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V3"/><path d="M6 14h12"/></svg>'; } }
-
-// --- FUNÇÕES DE RENDERIZAÇÃO ---
 if (!function_exists('render_header')) {
     function render_header($title) {
     ?><!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" /><title><?= htmlspecialchars($title) ?> - TestBot Manager</title><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script><script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.23/jspdf.plugin.autotable.min.js"></script><script src="https://cdn.tailwindcss.com"></script><link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"><style>body { font-family: 'Inter', sans-serif; overscroll-behavior-y: contain; } .content-scrollable::-webkit-scrollbar { display: none; } .content-scrollable { -ms-overflow-style: none; scrollbar-width: none; } details > summary { list-style: none; } details > summary::-webkit-details-marker { display: none; }</style></head><body class="bg-gray-100 text-gray-900 min-h-screen antialiased"><?php
     }
 }
-
-if (!function_exists('render_footer')) {
-    function render_footer() {
-    ?></body></html><?php
-    }
-}
-
+if (!function_exists('render_footer')) { function render_footer() { ?></body></html><?php } }
 if (!function_exists('render_flash_message')) {
     function render_flash_message() {
         if (isset($_SESSION['flash_message'])) {
             $flash = $_SESSION['flash_message'];
-            $colors = [
-                'success' => 'bg-green-100 border-green-500 text-green-700',
-                'error' => 'bg-red-100 border-red-500 text-red-700',
-                'info' => 'bg-blue-100 border-blue-500 text-blue-700'
-            ];
+            $colors = ['success' => 'bg-green-100 border-green-500 text-green-700', 'error' => 'bg-red-100 border-red-500 text-red-700', 'info' => 'bg-blue-100 border-blue-500 text-blue-700'];
             $colorClass = $colors[$flash['type']] ?? $colors['info'];
             echo '<div class="' . $colorClass . ' border-l-4 p-4 mb-4 rounded-r-lg" role="alert"><p>' . htmlspecialchars($flash['message']) . '</p></div>';
             unset($_SESSION['flash_message']);
         }
     }
 }
-
 if (!function_exists('render_app_layout')) {
     function render_app_layout($page, callable $content_renderer, $all_data) {
         $user = get_current_user();
         if (!$user) { logout(); }
-
         $pageTitles = ['dashboard' => "Dashboard", 'test-management' => "Gerir Testes", 'user-management' => "Gerir Utilizadores", 'reports' => "Relatórios", 'client-management' => "Gerir Clientes", 'project-management' => "Gerir Projetos", 'test-guidelines' => "Orientações de Teste", 'custom-templates' => "Modelos Personalizados"];
         $title = $pageTitles[$page] ?? 'Detalhes';
         render_header($title);
@@ -222,7 +249,6 @@ if (!function_exists('render_app_layout')) {
             'tester' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Meus Testes", 'path' => "test-management", 'icon' => ClipboardListIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
             'client' => [['name' => "Dashboard", 'path' => "dashboard", 'icon' => HomeIcon()],['name' => "Relatórios", 'path' => "reports", 'icon' => FileTextIcon()],['name' => "Orientações", 'path' => "test-guidelines", 'icon' => HelpCircleIcon()]],
         ];
-        
         $userNav = $navItems[$user['role']] ?? [];
         ?>
         <div class="h-screen w-screen flex flex-col sm:flex-row bg-gray-100">
@@ -240,41 +266,22 @@ if (!function_exists('render_app_layout')) {
         <?php render_footer();
     }
 }
-
 if (!function_exists('render_login_page')) {
     function render_login_page() {
         render_header('Login');
-        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label class="text-sm font-bold text-gray-600 mb-1 block" for="email">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label class="text-sm font-bold text-gray-600 mb-1 block" for="password">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
+        ?><div class="min-h-screen flex items-center justify-center bg-gray-100 px-4"><div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-sm"><h1 class="text-3xl font-bold text-gray-800 text-center mb-2">TestBot</h1><p class="text-center text-gray-500 mb-8">Manager Login</p><?php render_flash_message(); ?><form method="POST" action="index.php"><input type="hidden" name="action" value="login"><div class="mb-4"><label for="email" class="text-sm font-bold text-gray-600 mb-1 block">Email</label><input id="email" name="email" type="email" autocomplete="username" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><div class="mb-6"><label for="password" class="text-sm font-bold text-gray-600 mb-1 block">Senha</label><input id="password" name="password" type="password" autocomplete="current-password" required class="w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 transition"/></div><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg hover:bg-cyan-600 transition duration-200 font-bold">Entrar</button></form></div></div><?php
         render_footer();
     }
 }
-
 if (!function_exists('render_dashboard_page')) {
     function render_dashboard_page($data) {
         $user = get_current_user();
         if (!$user) { logout(); return; }
         $firstName = explode(' ', $user['name'])[0];
-        ?>
-        <div class="space-y-6"><h2 class="text-2xl font-bold text-gray-800">Olá, <?= htmlspecialchars($firstName) ?>!</h2></div>
-        <?php
+        ?> <div class="space-y-6"><h2 class="text-2xl font-bold text-gray-800">Olá, <?= htmlspecialchars($firstName) ?>!</h2></div> <?php
     }
 }
-
-if (!function_exists('render_error_page')) {
-    function render_error_page($title, $message) {
-        render_header("Erro");
-        ?>
-        <div class="min-h-screen flex items-center justify-center bg-gray-100 px-4">
-            <div class="bg-white p-8 rounded-2xl shadow-md w-full max-w-lg text-center">
-                <h1 class="text-3xl font-bold text-red-600 mb-2"><?= htmlspecialchars($title) ?></h1>
-                <div class="text-gray-600 text-left p-4 bg-gray-50 rounded-lg border border-gray-200"><?= $message ?></div>
-            </div>
-        </div>
-        <?php
-        render_footer();
-    }
-}
-// Cole aqui as suas outras funções de renderização (render_client_management_page, etc.)
+if (!function_exists('render_error_page')) { function render_error_page($title, $message) { render_header("Erro"); echo "<h1>$title</h1><p>$message</p>"; render_footer(); } }
 if (!function_exists('render_management_page')) { function render_management_page($title, $item_name, $items, callable $render_item, callable $render_form) { ?> <div class="space-y-6"> <details class="bg-white rounded-xl shadow-sm"><summary class="p-4 sm:p-6 cursor-pointer font-bold text-lg flex justify-between items-center"><span>Adicionar Novo <?= htmlspecialchars($item_name) ?></span><?= PlusIcon('w-5 h-5') ?></summary><div class="p-4 sm:p-6 border-t"><?php $render_form(); ?></div></details> <div class="bg-white rounded-xl shadow-sm p-4 sm:p-6"><h3 class="font-bold text-lg mb-4"><?= htmlspecialchars($title) ?></h3><div class="space-y-3"> <?php if (empty($items)): ?><p class="text-gray-500">Nenhum item encontrado.</p> <?php else: foreach ($items as $item): $render_item($item); endforeach; endif; ?> </div></div> </div> <?php } }
 if (!function_exists('render_client_management_page')) { function render_client_management_page($data) { render_management_page('Clientes', 'Cliente', $data['clients'], function($c) { echo '<div class="bg-gray-50 p-3 rounded-lg font-semibold">' . htmlspecialchars($c['name']) . '</div>'; }, function() { ?> <form method="POST"><input type="hidden" name="action" value="add_client"><input type="text" name="name" placeholder="Nome do Cliente" required class="w-full p-3 bg-gray-50 border rounded-lg mb-4"><button type="submit" class="w-full bg-cyan-500 text-white p-3 rounded-lg font-bold">Salvar Cliente</button></form> <?php }); } }
 if (!function_exists('render_project_management_page')) { function render_project_management_page($data) { echo "Página de Gestão de Projetos"; } }
@@ -304,7 +311,6 @@ $pages = [
     'custom-templates' => ['renderer' => 'render_custom_templates_page', 'roles' => ['admin']],
 ];
 
-// Lógica de Roteamento Principal
 if ($page === 'logout') {
     logout();
 }
@@ -314,28 +320,12 @@ if (!is_logged_in()) {
     exit;
 }
 
-// --- A PARTIR DAQUI, O UTILIZADOR ESTÁ LOGADO ---
-
 if (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
-    // Caminho feliz: renderiza a página solicitada
-    seed_initial_templates();
-    $all_data = get_data();
     $renderer = $pages[$page]['renderer'];
-    if (function_exists($renderer)) {
-        render_app_layout($page, $renderer, $all_data);
-    } else {
-        render_error_page('Erro de Configuração', "A função de renderização '$renderer' não foi encontrada.");
-    }
+    $all_data = get_data();
+    render_app_layout($page, $renderer, $all_data);
 } else {
-    // Caminho de falha: sessão inválida ou sem permissão. Desloga o utilizador.
-    $user_was_logged_in = is_logged_in(); // Verifica se ele estava logado antes de destruir a sessão
-    session_unset();
-    session_destroy();
-    session_start();
-    if ($user_was_logged_in) {
-        $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'A sua sessão expirou ou não tem permissão. Por favor, faça login novamente.'];
-    }
-    header('Location: index.php?page=login');
+    header('Location: index.php?page=dashboard');
     exit;
 }
 ?>
