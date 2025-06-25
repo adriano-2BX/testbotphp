@@ -27,21 +27,17 @@ class DatabaseSessionHandler implements SessionHandlerInterface {
         $db_pass = $db_parts['pass'] ?? null;
         $db_name = isset($db_parts['path']) ? ltrim($db_parts['path'], '/') : null;
         $db_port = $db_parts['port'] ?? 3306;
-
         $db = new mysqli($db_host, $db_user, $db_pass, $db_name, $db_port);
         if ($db && !$db->connect_error) {
             $this->db = $db;
             $this->ready = true;
             return true;
         }
-        error_log('DatabaseSessionHandler: Não foi possível conectar ao banco de dados.');
         return false;
     }
 
     public function close(): bool {
-        if ($this->ready && $this->db) {
-            return $this->db->close();
-        }
+        if ($this->ready && $this->db) { return $this->db->close(); }
         return true;
     }
 
@@ -127,17 +123,75 @@ if (!function_exists('login')) {
             if (password_verify($password, $user['password_hash'])) {
                 unset($user['password_hash']);
                 session_regenerate_id(true);
-                $_SESSION['user'] = $user;
+                // CORREÇÃO: Codifica para JSON para evitar corrupção de sessão
+                $_SESSION['user'] = json_encode($user); 
                 return true;
             }
         }
         return false;
     }
 }
+if (!function_exists('is_logged_in')) {
+    function is_logged_in() {
+        // CORREÇÃO: Verifica se existe e é uma string (porque guardamos como JSON)
+        return isset($_SESSION['user']) && is_string($_SESSION['user']);
+    }
+}
+if (!function_exists('get_current_user')) {
+    function get_current_user() {
+        if (!is_logged_in()) {
+            return null;
+        }
+        // CORREÇÃO: Descodifica o JSON para obter o array do utilizador
+        return json_decode($_SESSION['user'], true);
+    }
+}
+if (!function_exists('has_permission')) {
+    function has_permission($roles) {
+        $user = get_current_user();
+        // CORREÇÃO: A verificação agora é robusta porque get_current_user garante um array ou null
+        if (empty($user) || !isset($user['role'])) {
+            return false;
+        }
+        return in_array($user['role'], (array)$roles, true);
+    }
+}
 if (!function_exists('logout')) { function logout() { session_unset(); session_destroy(); header('Location: index.php?page=login'); exit; } }
-if (!function_exists('is_logged_in')) { function is_logged_in() { return isset($_SESSION['user']) && is_array($_SESSION['user']); } }
-if (!function_exists('get_current_user')) { function get_current_user() { return $_SESSION['user'] ?? null; } }
-if (!function_exists('has_permission')) { function has_permission($roles) { $user = get_current_user(); if (!$user) return false; return in_array($user['role'], (array)$roles, true); } }
+
+if (!function_exists('seed_initial_templates')) {
+    function seed_initial_templates() {
+        $conn = get_db_connection();
+        $result = $conn->query("SELECT COUNT(*) as count FROM test_templates WHERE is_custom = 0");
+        if ($result && $result->fetch_assoc()['count'] == 0) {
+            $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 0)");
+            foreach (PRESET_TESTS as $template) {
+                $formFieldsJson = json_encode($template['formFields']);
+                $stmt->bind_param("ssss", $template['id'], $template['name'], $template['description'], $formFieldsJson);
+                $stmt->execute();
+            }
+        }
+    }
+}
+
+if (!function_exists('get_data')) {
+    function get_data() {
+        $conn = get_db_connection();
+        $data = [
+            'clients' => $conn->query("SELECT * FROM clients ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
+            'projects' => $conn->query("SELECT * FROM projects ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
+            'users' => $conn->query("SELECT id, name, email, role FROM users ORDER BY name ASC")->fetch_all(MYSQLI_ASSOC),
+            'test_templates' => [], 'test_cases' => [], 'reports' => [],
+        ];
+        $templates_result = $conn->query("SELECT * FROM test_templates ORDER BY created_at DESC, name ASC");
+        while ($row = $templates_result->fetch_assoc()) { $row['formFields'] = json_decode($row['form_fields'], true); $data['test_templates'][] = $row; }
+        $test_cases_result = $conn->query("SELECT * FROM test_cases ORDER BY created_at DESC");
+        while ($row = $test_cases_result->fetch_assoc()) { $row['custom_fields'] = json_decode($row['custom_fields'] ?? '[]', true); $row['paused_state'] = json_decode($row['paused_state'] ?? '[]', true); $data['test_cases'][] = $row; }
+        $reports_result = $conn->query("SELECT * FROM reports ORDER BY execution_date DESC");
+        while ($row = $reports_result->fetch_assoc()) { $row['results'] = json_decode($row['results'], true); $data['reports'][] = $row; }
+        return $data;
+    }
+}
+
 if (!function_exists('handle_post_requests')) {
     function handle_post_requests() {
         if ($_SERVER['REQUEST_METHOD'] !== 'POST') return;
@@ -145,7 +199,7 @@ if (!function_exists('handle_post_requests')) {
         $conn = get_db_connection();
         $action = $_POST['action'] ?? '';
         $user = get_current_user();
-        $redirect_url = $_SERVER['REQUEST_URI']; // Padrão
+        $redirect_url = $_SERVER['REQUEST_URI'];
 
         try {
             switch ($action) {
@@ -162,7 +216,7 @@ if (!function_exists('handle_post_requests')) {
                 case 'add_project': if (has_permission('admin')) { $p = $_POST['project']; $stmt = $conn->prepare("INSERT INTO projects (client_id, name, whatsapp_number, description, objective) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("issss", $p['clientId'], $p['name'], $p['whatsappNumber'], $p['description'], $p['objective']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Projeto adicionado com sucesso!']; } break;
                 case 'add_user': if (has_permission('admin')) { $u = $_POST['user']; $password_hash = password_hash($u['password'], PASSWORD_DEFAULT); $stmt = $conn->prepare("INSERT INTO users (name, email, password_hash, role) VALUES (?, ?, ?, ?)"); $stmt->bind_param("ssss", $u['name'], $u['email'], $password_hash, $u['role']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Utilizador adicionado com sucesso!']; } break;
                 case 'add_test': if (has_permission('admin')) { $t = $_POST['test']; $test_id = 'TEST-' . time(); $custom_fields_json = $_POST['customFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_cases (id, project_id, template_id, assigned_to_id, custom_fields) VALUES (?, ?, ?, ?, ?)"); $stmt->bind_param("sisis", $test_id, $t['projectId'], $t['typeId'], $t['assignedTo'], $custom_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Caso de teste criado com sucesso!']; } break;
-                case 'execute_test': if (has_permission('tester')) { $testCaseId = $_POST['test_case_id']; $resultsJson = json_encode($_POST['results']); $reportId = 'REP-' . time(); $executionDate = date('Y-m-d H:i:s'); $conn->begin_transaction(); $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?"); $stmt_update->bind_param("s", $testCaseId); $stmt_update->execute(); $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)"); $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson); $stmt_insert->execute(); $conn->commit(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste concluído e relatório gerado!']; } break;
+                case 'execute_test': if (has_permission('tester') && $user) { $testCaseId = $_POST['test_case_id']; $resultsJson = json_encode($_POST['results']); $reportId = 'REP-' . time(); $executionDate = date('Y-m-d H:i:s'); $conn->begin_transaction(); $stmt_update = $conn->prepare("UPDATE test_cases SET status = 'completed', paused_state = NULL WHERE id = ?"); $stmt_update->bind_param("s", $testCaseId); $stmt_update->execute(); $stmt_insert = $conn->prepare("INSERT INTO reports (id, test_case_id, tester_id, execution_date, results) VALUES (?, ?, ?, ?, ?)"); $stmt_insert->bind_param("ssiss", $reportId, $testCaseId, $user['id'], $executionDate, $resultsJson); $stmt_insert->execute(); $conn->commit(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste concluído e relatório gerado!']; } break;
                 case 'pause_test': if (has_permission('tester')) { $pausedStateJson = json_encode($_POST['results']); $stmt = $conn->prepare("UPDATE test_cases SET status = 'paused', paused_state = ? WHERE id = ?"); $stmt->bind_param("ss", $pausedStateJson, $_POST['test_case_id']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Teste pausado com sucesso.']; } break;
                 case 'resume_test': if (has_permission('tester')) { $stmt = $conn->prepare("UPDATE test_cases SET status = 'pending' WHERE id = ?"); $stmt->bind_param("s", $_POST['test_case_id']); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'info', 'message' => 'Teste retomado.']; } break;
                 case 'add_custom_template': if (has_permission('admin')) { $t = $_POST['template']; $template_id = 'CUSTOM-' . time(); $form_fields_json = $_POST['formFields'] ?? '[]'; $stmt = $conn->prepare("INSERT INTO test_templates (id, name, description, form_fields, is_custom) VALUES (?, ?, ?, ?, 1)"); $stmt->bind_param("ssss", $template_id, $t['name'], $t['description'], $form_fields_json); $stmt->execute(); $_SESSION['flash_message'] = ['type' => 'success', 'message' => 'Modelo personalizado criado com sucesso!']; } break;
@@ -172,14 +226,12 @@ if (!function_exists('handle_post_requests')) {
             if ($conn->in_transaction) { $conn->rollback(); }
             $_SESSION['flash_message'] = ['type' => 'error', 'message' => 'Ocorreu um erro ao processar a sua solicitação.'];
         }
-
         header('Location: ' . $redirect_url);
         exit;
     }
 }
-// Copie e cole todas as suas funções de ÍCONES e de RENDERIZAÇÃO aqui.
-// Elas não precisam de alteração.
-// Exemplo:
+
+// --- FUNÇÕES DE ÍCONES (SVG) E RENDERIZAÇÃO ---
 if (!function_exists('HomeIcon')) { function HomeIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>'; } }
 if (!function_exists('ClipboardListIcon')) { function ClipboardListIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>'; } }
 if (!function_exists('UsersIcon')) { function UsersIcon($props = '') { return '<svg '.$props.' xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>'; } }
@@ -235,13 +287,17 @@ if (!is_logged_in()) {
     exit;
 }
 
-if (isset($pages[$page]) && has_permission($pages[$page]['roles'])) {
-    $renderer = $pages[$page]['renderer'];
-    $all_data = get_data();
-    render_app_layout($page, $renderer, $all_data);
-} else {
-    // Se a página não existe ou não tem permissão, redireciona para o dashboard
+// Se o utilizador está logado, mas tenta aceder a uma página inválida ou sem permissão
+if (!isset($pages[$page]) || !has_permission($pages[$page]['roles'])) {
+    // Redireciona para o dashboard como uma página segura
     header('Location: index.php?page=dashboard');
     exit;
 }
+
+// Caminho feliz: renderiza a página solicitada
+seed_initial_templates();
+$all_data = get_data();
+$renderer = $pages[$page]['renderer'];
+render_app_layout($page, $renderer, $all_data);
+
 ?>
